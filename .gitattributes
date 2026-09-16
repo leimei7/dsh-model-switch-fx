@@ -1,0 +1,13 @@
+# 跨平台统一换行符：仓库里一律 LF，避免 Windows 检出后 diff 全是换行
+* text=auto eol=lf
+
+# 二进制资源不要做任何转换
+*.mp3 binary
+*.png binary
+*.jpg binary
+*.webp binary
+
+# 给 GitHub 语言统计用
+*.js  text
+*.mjs text
+*.html text

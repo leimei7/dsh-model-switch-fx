@@ -1,0 +1,35 @@
+MIT License
+
+Copyright (c) 2026 leimei7
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## 第三方商标与素材声明 / Third-party trademarks
+
+本插件中出现的所有品牌 logo 均为其各自所有者的注册商标或商标，
+仅用于识别对应的 AI 服务，不代表任何形式的授权、合作或背书。
+
+The brand logos shown in this plugin are trademarks or registered trademarks of
+their respective owners. They are used solely to identify the corresponding AI
+services and do not imply any affiliation with or endorsement by them.
+
+- logo 矢量路径取自 [LobeHub Icons](https://github.com/lobehub/lobe-icons)（MIT）
+- 角色语音由 MiMo TTS（`mimo-v2.5-tts-voicedesign`）按各角色人设生成后做后期处理

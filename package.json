@@ -1,0 +1,60 @@
+{
+  "name": "dsh-model-switch-fx",
+  "version": "1.0.0",
+  "description": "DSH Web 插件：在模型选择器里换一个模型，屏幕中央立刻播放对应 AI 娘的 logo 描边动画与角色语音。零依赖、零构建，纯宿主插件。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "model-switch",
+    "logo",
+    "animation",
+    "voice",
+    "web-ui"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "assets",
+    "tools",
+    "showcase.html",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "gen": "node tools/gen-logos.mjs",
+    "preview": "node tools/preview.mjs",
+    "test": "node tools/test-watch.mjs",
+    "test:browser": "node tools/test-takeover.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leimei7/dsh-model-switch-fx.git"
+  },
+  "homepage": "https://github.com/leimei7/dsh-model-switch-fx#readme",
+  "bugs": {
+    "url": "https://github.com/leimei7/dsh-model-switch-fx/issues"
+  },
+  "author": "leimei7",
+  "license": "MIT"
+}

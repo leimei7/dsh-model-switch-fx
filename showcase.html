@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI UNIVERSE</title>
+<style>
+/* 不引用外部字体：Google Fonts 的 @import 会阻塞脚本执行，断网/被墙时整页失效 */
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#06060e;color:#fff;
+  font-family:'Share Tech Mono','Cascadia Mono',Consolas,'Courier New',ui-monospace,monospace}
+
+/* === CRT 扫描线 + 暗角 === */
+#crt{position:fixed;inset:0;pointer-events:none;z-index:999;
+  background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(0,0,0,.08) 2px 4px)}
+#crt::after{content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at center,transparent 50%,rgba(0,0,0,.5) 100%)}
+
+/* === 粒子 === */
+.box-p{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
+.dot{position:absolute;background:rgba(0,255,255,.25);border-radius:50%;animation:floaty linear infinite}
+@keyframes floaty{
+  0%{transform:translateY(0) translateX(0);opacity:.1}
+  50%{transform:translateY(-90px) translateX(12px);opacity:.55}
+  100%{transform:translateY(0) translateX(0);opacity:.1}}
+
+/* === 幻灯片 === */
+.page{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .55s ease}
+.page.on{opacity:1;pointer-events:auto}
+
+/* === Logo === */
+.logo-box{position:relative;width:min(46vw,380px,44vh);height:min(46vw,380px,44vh);margin-bottom:26px}
+.logo-box .glow{position:absolute;inset:-38%;border-radius:50%;filter:blur(90px);opacity:0}
+.logo-box svg{width:100%;height:100%;overflow:visible;display:block}
+
+/* 只让描边层镂空，实心层正常填充 */
+/* 默认就是「未绘制」，避免首帧闪出完整图形 */
+.logo-box svg .outline path{fill:none;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:1000;stroke-dashoffset:1000}
+.logo-box svg .solid{stroke:none;opacity:0}
+
+/* 霓虹呼吸：放在光晕 div 上（transform/opacity 走合成器），
+   不要加在 SVG 根节点上的 filter —— 会和视差 transform 冲突 */
+@keyframes haloPulse{
+  0%,100%{opacity:.08;transform:scale(.94)}
+  50%{opacity:.2;transform:scale(1.1)}}
+.page.on .glow{animation:haloPulse 3.2s ease-in-out infinite}
+
+/* CRT 扫描线 */
+.scan{position:absolute;left:-10%;right:-10%;top:0;height:2px;border-radius:2px;
+  pointer-events:none;opacity:0;
+  background:linear-gradient(90deg,transparent,var(--gc) 25%,#fff 50%,var(--gc) 75%,transparent);
+  box-shadow:0 0 16px var(--gc),0 0 42px var(--gc)}
+.scan.go{animation:sweep .85s cubic-bezier(.35,0,.45,1) forwards}
+@keyframes sweep{
+  0%{top:-3%;opacity:0;transform:scaleX(.7)}
+  12%{opacity:1;transform:scaleX(1)}
+  88%{opacity:1;transform:scaleX(1)}
+  100%{top:100%;opacity:0;transform:scaleX(.7)}}
+
+.idx{position:absolute;top:-32px;left:-2px;font-size:.68rem;letter-spacing:.22em;
+  color:var(--gc);opacity:0;transition:opacity .6s ease 1s}
+.page.on .idx{opacity:.55}
+
+/* 标题 */
+.t{font-family:'Orbitron','Century Gothic','Bahnschrift','DIN Alternate','Arial Narrow',Impact,sans-serif;
+  font-size:clamp(1.4rem,3.5vw,2.6rem);font-weight:900;
+  letter-spacing:.3em;text-transform:uppercase;opacity:0;transform:translateY(12px);transition:all .6s ease 1.2s}
+.page.on .t{opacity:1;transform:none}
+.sub{font-size:clamp(.6rem,1.3vw,.88rem);letter-spacing:.16em;margin-top:6px;
+  opacity:0;transform:translateY(8px);transition:all .6s ease 1.5s}
+.page.on .sub{opacity:.45;transform:none}
+
+/* === UI === */
+#bar{position:fixed;top:0;left:0;height:2px;z-index:100;transition:width .45s ease;
+  background:linear-gradient(90deg,#00ffff,#ff00ff)}
+#num{position:fixed;top:14px;right:20px;z-index:100;font-size:.65rem;letter-spacing:.1em;opacity:.25}
+#tip{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:100;
+  font-size:.62rem;letter-spacing:.2em;animation:blink 2.6s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:.1}50%{opacity:.4}}
+
+/* === 闪烁 === */
+#flash{position:fixed;inset:0;z-index:998;pointer-events:none;opacity:0;background:#fff}
+</style>
+</head>
+<body>
+
+<div id="crt"></div>
+<div class="box-p" id="pts"></div>
+<div id="flash"></div>
+<div id="bar" style="width:0"></div>
+<div id="num">01 / 06</div>
+
+<!-- ========== 1. OpenAI ========== -->
+<div class="page on" data-i="0">
+  <div class="logo-box">
+    <div class="glow" style="background:#10b981"></div>
+    <svg viewBox="-90 -90 180 180" style="--gc:#10b981">
+      <defs><filter id="f1"><feDropShadow stdDeviation="2" flood-color="#10b981" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="6" flood-color="#10b981" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f1)" stroke="#10b981" stroke-width="1.6" fill="none">
+        <path class="anim" d="M0-23V-32L52.5-2Q55.8 0 56 3.5V42.7A44 44 0 0 1-24.4 70.5H-10A33.3 33.3 0 0 0 44 46V2.3"/>
+        <path class="anim" d="M0-23V-32L52.5-2Q55.8 0 56 3.5V42.7A44 44 0 0 1-24.4 70.5H-10A33.3 33.3 0 0 0 44 46V2.3" transform="rotate(60)"/>
+        <path class="anim" d="M0-23V-32L52.5-2Q55.8 0 56 3.5V42.7A44 44 0 0 1-24.4 70.5H-10A33.3 33.3 0 0 0 44 46V2.3" transform="rotate(120)"/>
+        <path class="anim" d="M0-23V-32L52.5-2Q55.8 0 56 3.5V42.7A44 44 0 0 1-24.4 70.5H-10A33.3 33.3 0 0 0 44 46V2.3" transform="rotate(180)"/>
+        <path class="anim" d="M0-23V-32L52.5-2Q55.8 0 56 3.5V42.7A44 44 0 0 1-24.4 70.5H-10A33.3 33.3 0 0 0 44 46V2.3" transform="rotate(240)"/>
+        <path class="anim" d="M0-23V-32L52.5-2Q55.8 0 56 3.5V42.7A44 44 0 0 1-24.4 70.5H-10A33.3 33.3 0 0 0 44 46V2.3" transform="rotate(300)"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#10b981">OPENAI</div>
+  <div class="sub">ChatGPT · 探索无限可能</div>
+</div>
+
+<!-- ========== 2. Gemini ========== -->
+<div class="page" data-i="1">
+  <div class="logo-box">
+    <div class="glow" style="background:#8E75FF"></div>
+    <svg viewBox="0 0 24 24" style="--gc:#8E75FF">
+      <defs><filter id="f2"><feDropShadow stdDeviation=".5" flood-color="#8E75FF" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.8" flood-color="#8E75FF" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f2)">
+        <path class="anim" stroke="#8E75FF" stroke-width=".45"
+          d="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#8E75FF">GEMINI</div>
+  <div class="sub">Google · 星芒交汇</div>
+</div>
+
+<!-- ========== 3. Claude ========== -->
+<div class="page" data-i="2">
+  <div class="logo-box">
+    <div class="glow" style="background:#D4A574"></div>
+    <svg viewBox="0 0 1200 1200" style="--gc:#D4A574">
+      <defs><filter id="f3"><feDropShadow stdDeviation="6" flood-color="#D4A574" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="18" flood-color="#D4A574" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f3)">
+        <path class="anim" stroke="#D4A574" stroke-width="5"
+          d="M233.96 800.21L468.64 668.54l3.95-11.44-3.95-6.36h-11.44l-39.22-2.42-134.09-3.62-116.3-4.83-112.67-6.04-28.35-6.04-26.58-35.03 2.74-17.48 23.84-16.03 34.15 2.98 75.46 5.15 113.24 7.81 82.15 4.83 121.69 12.64h19.33l2.74-7.81-6.6-4.83-5.16-4.83-117.18-79.41-126.85-83.92-66.44-48.32-35.92-24.48-18.12-22.95-7.81-50.09 32.62-35.92h43.81l11.2 2.98 44.37 34.13 94.79 73.37 123.79 91.17 18.12 15.06 7.25-5.15.89-3.62-8.13-13.62-67.27-121.69-71.84-123.79-32.03-51.3-8.46-30.77c-2.98-12.64-5.15-23.27-5.15-36.24l37.13-50.42h20.54l49.54 6.6 20.86 18.12 30.77 70.39 49.85 110.82 77.32 150.68 22.63 44.7 12.08 41.4 4.51 12.64h7.81v-7.25l6.36-84.89 11.76-104.21 11.44-134.09 3.95-37.77 18.68-45.26 37.13-24.48 28.99 13.85 23.84 34.15-3.3 22.07-14.17 92.13-27.79 144.32-18.12 96.64h10.55l12.08-12.08 48.89-64.91 82.15-102.68 36.24-40.75 42.28-45.02 27.14-21.42h51.3l37.77 56.13-16.91 57.99-52.83 66.99-43.81 56.78-62.82 84.56-39.22 67.65 3.62 5.4 9.35-.89 141.91-30.2 76.67-13.85 91.49-15.7 41.4 19.33 4.51 19.65-16.27 40.19-97.85 24.16-114.77 22.95-170.89 40.43-2.09 1.53 2.42 2.98 76.99 7.25 32.94 1.77h80.62l150.12 11.2 39.22 25.93 23.52 31.73-3.95 24.16-60.4 30.77-81.5-19.33-190.23-45.26-65.24-16.27h-9.02v5.4l54.36 53.15 99.62 89.96 124.75 115.97 6.36 28.67-16.03 22.63h-16.91l-109.61-82.47-42.28-37.13-95.76-80.62h-6.36v8.46l22.07 32.29 116.54 175.17 6.04 53.72-8.46 17.48-30.2 10.55-33.18-6.04-68.21-95.76-70.39-107.84-56.78-96.64-6.93 3.95-33.5 360.89-15.7 18.44-36.24 13.85-30.2-22.95-16.03-37.13 16.03-73.37 19.33-95.76 15.7-76.11 14.17-94.55 8.46-31.41-.56-2.09-6.93.89-71.27 97.85-108.4 146.5-85.77 91.81-20.54 8.13-35.6-18.44 3.3-32.94 19.89-29.32 118.71-150.99 71.6-93.58 46.23-53.95-.32-7.81-2.74-.01L205.29 929.4l-56.13 7.25-24.16-22.63 2.98-37.13 11.44-12.08 94.79-64.91-.32.32z"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#D4A574">CLAUDE</div>
+  <div class="sub">Anthropic · 温暖光芒</div>
+</div>
+
+<!-- ========== 4. Kimi ========== -->
+<div class="page" data-i="3">
+  <div class="logo-box">
+    <div class="glow" style="background:#7C6BF0"></div>
+    <svg viewBox="0 0 24 24" style="--gc:#7C6BF0">
+      <defs><filter id="f4"><feDropShadow stdDeviation=".5" flood-color="#7C6BF0" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.8" flood-color="#7C6BF0" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f4)">
+        <path class="anim" stroke="#7C6BF0" stroke-width=".3"
+          d="m1.053 16.91 9.538 2.55a21 20.981 0 0 0 .06 2.031l5.956 1.592a12 11.99 0 0 1-15.554-6.172m-1.02-5.79 11.352 3.035a21 20.981 0 0 0-.469 2.01l10.817 2.89a12 11.99 0 0 1-1.845 2.004L.658 15.918a12 11.99 0 0 1-.625-4.796m1.593-5.146L13.573 9.17a21 20.981 0 0 0-1.01 1.874l11.297 3.02a21 20.981 0 0 1-.67 2.362l-11.55-3.087L.125 10.26a12 11.99 0 0 1 1.499-4.285ZM6.067 1.58l11.285 3.016a21 20.981 0 0 0-1.688 1.719l7.824 2.091a21 20.981 0 0 1 .513 2.664L2.107 5.218a12 11.99 0 0 1 3.96-3.638M21.68 4.866 7.222 1.003A12 11.99 0 0 1 21.68 4.866"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#7C6BF0">KIMI</div>
+  <div class="sub">月之暗面 · Moonshot AI</div>
+</div>
+
+<!-- ========== 5. DeepSeek ========== -->
+<div class="page" data-i="4">
+  <div class="logo-box">
+    <div class="glow" style="background:#00D4FF"></div>
+    <svg viewBox="-1 -2 25 25" style="--gc:#00D4FF">
+      <defs><filter id="f5"><feDropShadow stdDeviation=".4" flood-color="#00D4FF" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.5" flood-color="#00D4FF" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f5)">
+        <path class="anim" stroke="#00D4FF" stroke-width=".3"
+          d="M23.0584 4.95203C22.8129 4.83203 22.7074 5.06103 22.5639 5.17704C22.5149 5.21454 22.4734 5.26354 22.4319 5.30854C22.0734 5.69155 21.6543 5.94306 21.1073 5.91306C20.3073 5.86806 19.6243 6.11957 19.0203 6.73158C18.8918 5.97706 18.4652 5.52655 17.8162 5.23754C17.4767 5.08753 17.1332 4.93703 16.8952 4.61052C16.7292 4.37801 16.6837 4.11901 16.6007 3.8635C16.5477 3.70949 16.4952 3.55199 16.3177 3.52549C16.1252 3.49549 16.0497 3.65699 15.9742 3.792C15.6722 4.34401 15.5552 4.95203 15.5667 5.56805C15.5932 6.95359 16.1782 8.05712 17.3407 8.84215C17.4727 8.93215 17.5067 9.02215 17.4652 9.15366C17.3857 9.42416 17.2917 9.68667 17.2087 9.95718C17.1557 10.1297 17.0767 10.1677 16.8917 10.0922C16.2537 9.82568 15.7027 9.43117 15.2156 8.95465C14.3891 8.15513 13.6416 7.2726 12.7096 6.58158C12.4906 6.42007 12.2716 6.27007 12.045 6.12707C11.094 5.20354 12.1696 4.44502 12.4186 4.35501C12.6791 4.26101 12.5091 3.938 11.6675 3.942C10.826 3.9455 10.056 4.22751 9.07446 4.60302C8.93096 4.65952 8.77995 4.70052 8.62545 4.73452C7.73492 4.56552 6.80989 4.52802 5.84386 4.63702C4.02481 4.83953 2.57177 5.69955 1.50373 7.1676C0.220694 8.93215 -0.0813148 10.9372 0.288196 13.0283C0.676708 15.2323 1.80174 17.0569 3.53029 18.4834C5.32285 19.9625 7.38741 20.6875 9.74298 20.5485C11.1735 20.466 12.7661 20.2745 14.5626 18.7539C15.0156 18.9795 15.4912 19.0695 16.2797 19.137C16.8872 19.1935 17.4722 19.107 17.9252 19.013C18.6347 18.8629 18.5857 18.2059 18.3292 18.0854C16.2497 17.1169 16.7062 17.5109 16.2912 17.1919C17.3477 15.9419 18.9618 13.7198 19.4598 10.6942C19.5088 10.3602 19.5713 9.88968 19.5638 9.61917C19.5598 9.45417 19.5978 9.39016 19.7863 9.37116C20.3073 9.31116 20.8128 9.16866 21.2773 8.91315C22.6249 8.17713 23.1684 6.96809 23.2964 5.51905C23.3154 5.29754 23.2924 5.06853 23.0584 4.95203ZM11.3165 17.9954C9.30097 16.4109 8.32344 15.8894 7.91992 15.9119C7.54241 15.9344 7.61042 16.3664 7.69342 16.6479C7.78042 16.9259 7.89342 17.1174 8.05193 17.3614C8.16143 17.5229 8.23694 17.7629 7.94243 17.9434C7.29341 18.3449 6.16487 17.8084 6.11187 17.7819C4.79833 17.0084 3.7003 15.9874 2.92628 14.5908C2.17875 13.2468 1.74474 11.8047 1.67324 10.2657C1.65424 9.89418 1.76374 9.76267 2.13375 9.69517C2.62077 9.60517 3.12278 9.58617 3.6093 9.65767C5.66636 9.95818 7.41741 10.8777 8.88545 12.3348C9.72348 13.1643 10.3575 14.1558 11.0105 15.1243C11.705 16.1529 12.4521 17.1329 13.4036 17.9364C13.7396 18.2179 14.0076 18.4319 14.2641 18.5899C13.4906 18.6764 12.1996 18.6949 11.3165 17.9964V17.9954ZM12.2826 11.7817C12.2826 11.6167 12.4146 11.4852 12.5806 11.4852C12.6181 11.4852 12.6521 11.4927 12.6826 11.5037C12.7241 11.5187 12.7621 11.5412 12.7921 11.5752C12.8451 11.6277 12.8751 11.7027 12.8751 11.7817C12.8751 11.9467 12.7431 12.0782 12.5771 12.0782C12.4111 12.0782 12.2826 11.9467 12.2826 11.7817ZM15.2831 13.3208C15.0906 13.3998 14.8981 13.4673 14.7131 13.4748C14.4261 13.4898 14.1131 13.3733 13.9431 13.2308C13.6791 13.0093 13.4901 12.8853 13.4111 12.4988C13.3771 12.3338 13.3961 12.0782 13.4261 11.9317C13.4941 11.6162 13.4186 11.4137 13.1961 11.2297C13.0151 11.0797 12.7846 11.0382 12.5316 11.0382C12.4371 11.0382 12.3506 10.9967 12.2861 10.9632C12.1806 10.9107 12.0936 10.7792 12.1766 10.6177C12.2031 10.5652 12.3316 10.4377 12.3616 10.4152C12.7051 10.2197 13.1011 10.2837 13.4676 10.4302C13.8071 10.5692 14.0641 10.8242 14.4336 11.1847C14.8111 11.6202 14.8791 11.7402 15.0941 12.0672C15.2641 12.3228 15.4186 12.5853 15.5247 12.8858C15.5887 13.0733 15.5057 13.2268 15.2831 13.3208Z"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#00D4FF">DEEPSEEK</div>
+  <div class="sub">深度求索 · 探索深海智慧</div>
+</div>
+
+<!-- ========== 6. GLM ========== -->
+<div class="page" data-i="5">
+  <div class="logo-box">
+    <div class="glow" style="background:#504AF4"></div>
+    <svg viewBox="0 0 24 24" style="--gc:#504AF4">
+      <defs><filter id="f6"><feDropShadow stdDeviation=".5" flood-color="#504AF4" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.8" flood-color="#504AF4" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f6)">
+        <path class="anim" stroke="#504AF4" stroke-width=".3" fill-rule="evenodd"
+          d="M9.917 2c4.906 0 10.178 3.947 8.93 10.58-.014.07-.037.14-.057.21l-.003-.277c-.083-3-1.534-8.934-8.87-8.934-3.393 0-8.137 3.054-7.93 8.158-.04 4.778 3.555 8.4 7.95 8.332l.073-.001c1.2-.033 2.763-.429 3.1-1.657.063-.031.26.534.268.598.048.256.112.369.192.34.981-.348 2.286-1.222 1.952-2.38-.176-.61-1.775-.147-1.921-.347.418-.979 2.234-.926 3.153-.716.443.102.657.38 1.012.442.29.052.981-.2.96.242-1.5 3.042-4.893 5.41-8.808 5.41C3.654 22 0 16.574 0 11.737 0 5.947 4.959 2 9.917 2zM9.9 5.3c.484 0 1.125.225 1.38.585 3.669.145 4.313 2.686 4.694 5.444.255 1.838.315 2.3.182 1.387l.083.59c.068.448.554.737.982.516.144-.075.254-.231.328-.47a.2.2 0 01.258-.13l.625.22a.2.2 0 01.124.238 2.172 2.172 0 01-.51.92c-.878.917-2.757.664-3.08-.62-.14-.554-.055-.626-.345-1.242-.292-.621-1.238-.709-1.69-.295-.345.315-.407.805-.406 1.282L12.6 15.9a.9.9 0 01-.9.9h-1.4a.9.9 0 01-.9-.9v-.65a1.15 1.15 0 10-2.3 0v.65a.9.9 0 01-.9.9H4.8a.9.9 0 01-.9-.9l.035-3.239c.012-1.884.356-3.658 2.47-4.134.2-.045.252.13.29.342.025.154.043.252.053.294.701 3.058 1.75 4.299 3.144 3.722l.66-.331.254-.13c.158-.082.25-.131.276-.15.012-.01-.165-.206-.407-.464l-1.012-1.067a8.925 8.925 0 01-.199-.216c-.047-.034-.116.068-.208.306-.074.157-.251.252-.272.326-.013.058.108.298.362.72.164.288.22.508-.31.343-1.04-.8-1.518-2.273-1.684-3.725-.004-.035-.162-1.913-.162-1.913a1.2 1.2 0 011.113-1.281L9.9 5.3zm12.994 8.68c.037.697-.403.704-1.213.591l-1.783-.276c-.265-.053-.385-.099-.313-.147.47-.315 3.268-.93 3.31-.168zm-.915-.083l-.926.042c-.85.077-1.452.24.338.336l.103.003c.815.012 1.264-.359.485-.381zm1.667-3.601h.01c.79.398.067 1.03-.65 1.393-.14.07-.491.176-1.052.315-.241.04-.457.092-.333.16l.01.005c1.952.958-3.123 1.534-2.495 1.285l.38-.148c.68-.266 1.614-.682 1.666-1.337.038-.48 1.253-.442 1.493-.968.048-.106 0-.236-.144-.389-.05-.047-.094-.094-.107-.148-.073-.305.7-.431 1.222-.168zm-2.568-.474c-.135 1.198-2.479 4.192-1.949 2.863l.017-.042c.298-.717.376-2.221 1.337-3.221.25-.26.636.035.595.4zm-7.976-.253c.02-.694 1.002-.968 1.346-.347.01-1.274-1.941-.768-1.346.347z"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#504AF4">GLM</div>
+  <div class="sub">智谱AI · ChatGLM · 知识无界</div>
+</div>
+
+<!-- ========== 7. Qwen ========== -->
+<div class="page" data-i="6">
+  <div class="logo-box">
+    <div class="glow" style="background:#615CED"></div>
+    <svg viewBox="0 0 24 24" style="--gc:#615CED">
+      <defs><filter id="f7"><feDropShadow stdDeviation=".5" flood-color="#615CED" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.8" flood-color="#615CED" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f7)">
+        <path class="anim" stroke="#615CED" stroke-width=".3" fill-rule="evenodd"
+          d="M12.604 1.34c.393.69.784 1.382 1.174 2.075a.18.18 0 00.157.091h5.552c.174 0 .322.11.446.327l1.454 2.57c.19.337.24.478.024.837-.26.43-.513.864-.76 1.3l-.367.658c-.106.196-.223.28-.04.512l2.652 4.637c.172.301.111.494-.043.77-.437.785-.882 1.564-1.335 2.34-.159.272-.352.375-.68.37-.777-.016-1.552-.01-2.327.016a.099.099 0 00-.081.05 575.097 575.097 0 01-2.705 4.74c-.169.293-.38.363-.725.364-.997.003-2.002.004-3.017.002a.537.537 0 01-.465-.271l-1.335-2.323a.09.09 0 00-.083-.049H4.982c-.285.03-.553-.001-.805-.092l-1.603-2.77a.543.543 0 01-.002-.54l1.207-2.12a.198.198 0 000-.197 550.951 550.951 0 01-1.875-3.272l-.79-1.395c-.16-.31-.173-.496.095-.965.465-.813.927-1.625 1.387-2.436.132-.234.304-.334.584-.335a338.3 338.3 0 012.589-.001.124.124 0 00.107-.063l2.806-4.895a.488.488 0 01.422-.246c.524-.001 1.053 0 1.583-.006L11.704 1c.341-.003.724.032.9.34zm-3.432.403a.06.06 0 00-.052.03L6.254 6.788a.157.157 0 01-.135.078H3.253c-.056 0-.07.025-.041.074l5.81 10.156c.025.042.013.062-.034.063l-2.795.015a.218.218 0 00-.2.116l-1.32 2.31c-.044.078-.021.118.068.118l5.716.008c.046 0 .08.02.104.061l1.403 2.454c.046.081.092.082.139 0l5.006-8.76.783-1.382a.055.055 0 01.096 0l1.424 2.53a.122.122 0 00.107.062l2.763-.02a.04.04 0 00.035-.02.041.041 0 000-.04l-2.9-5.086a.108.108 0 010-.113l.293-.507 1.12-1.977c.024-.041.012-.062-.035-.062H9.2c-.059 0-.073-.026-.043-.077l1.434-2.505a.107.107 0 000-.114L9.225 1.774a.06.06 0 00-.053-.031zm6.29 8.02c.046 0 .058.02.034.06l-.832 1.465-2.613 4.585a.056.056 0 01-.05.029.058.058 0 01-.05-.029L8.498 9.841c-.02-.034-.01-.052.028-.054l.216-.012 6.722-.012z"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#615CED">QWEN</div>
+  <div class="sub">Alibaba · 千问</div>
+</div>
+
+<!-- ========== 8. Grok ========== -->
+<div class="page" data-i="7">
+  <div class="logo-box">
+    <div class="glow" style="background:#E8EAED"></div>
+    <svg viewBox="0 0 24 24" style="--gc:#E8EAED">
+      <defs><filter id="f8"><feDropShadow stdDeviation=".5" flood-color="#E8EAED" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.8" flood-color="#E8EAED" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f8)">
+        <path class="anim" stroke="#E8EAED" stroke-width=".3" fill-rule="evenodd"
+          d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#E8EAED">GROK</div>
+  <div class="sub">SpaceXAI · xAI</div>
+</div>
+
+<!-- ========== 9. MiniMax ========== -->
+<div class="page" data-i="8">
+  <div class="logo-box">
+    <div class="glow" style="background:#F03B5D"></div>
+    <svg viewBox="0 0 24 24" style="--gc:#F03B5D">
+      <defs><filter id="f9"><feDropShadow stdDeviation=".5" flood-color="#F03B5D" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.8" flood-color="#F03B5D" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f9)">
+        <path class="anim" stroke="#F03B5D" stroke-width=".3" fill-rule="evenodd"
+          d="M16.278 2c1.156 0 2.093.927 2.093 2.07v12.501a.74.74 0 00.744.709.74.74 0 00.743-.709V9.099a2.06 2.06 0 012.071-2.049A2.06 2.06 0 0124 9.1v6.561a.649.649 0 01-.652.645.649.649 0 01-.653-.645V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v7.472a2.037 2.037 0 01-2.048 2.026 2.037 2.037 0 01-2.048-2.026v-12.5a.785.785 0 00-.788-.753.785.785 0 00-.789.752l-.001 15.904A2.037 2.037 0 0113.441 22a2.037 2.037 0 01-2.048-2.026V18.04c0-.356.292-.645.652-.645.36 0 .652.289.652.645v1.934c0 .263.142.506.372.638.23.131.514.131.744 0a.734.734 0 00.372-.638V4.07c0-1.143.937-2.07 2.093-2.07zm-5.674 0c1.156 0 2.093.927 2.093 2.07v11.523a.648.648 0 01-.652.645.648.648 0 01-.652-.645V4.07a.785.785 0 00-.789-.78.785.785 0 00-.789.78v14.013a2.06 2.06 0 01-2.07 2.048 2.06 2.06 0 01-2.071-2.048V9.1a.762.762 0 00-.766-.758.762.762 0 00-.766.758v3.8a2.06 2.06 0 01-2.071 2.049A2.06 2.06 0 010 12.9v-1.378c0-.357.292-.646.652-.646.36 0 .653.29.653.646V12.9c0 .418.343.757.766.757s.766-.339.766-.757V9.099a2.06 2.06 0 012.07-2.048 2.06 2.06 0 012.071 2.048v8.984c0 .419.343.758.767.758.423 0 .766-.339.766-.758V4.07c0-1.143.937-2.07 2.093-2.07z"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#F03B5D">MINIMAX</div>
+  <div class="sub">MiniMax Group Inc. · 海螺</div>
+</div>
+
+<!-- ========== 10. MUSESPARK ========== -->
+<div class="page" data-i="9">
+  <div class="logo-box">
+    <div class="glow" style="background:#0081FB"></div>
+    <svg viewBox="0 0 24 24" style="--gc:#0081FB">
+      <defs><filter id="f10"><feDropShadow stdDeviation=".5" flood-color="#0081FB" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.8" flood-color="#0081FB" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f10)">
+        <path class="anim" stroke="#0081FB" stroke-width=".3" fill-rule="evenodd"
+          d="M6.897 4c1.915 0 3.516.932 5.43 3.376l.282-.373c.19-.246.383-.484.58-.71l.313-.35C14.588 4.788 15.792 4 17.225 4c1.273 0 2.469.557 3.491 1.516l.218.213c1.73 1.765 2.917 4.71 3.053 8.026l.011.392.002.25c0 1.501-.28 2.759-.818 3.7l-.14.23-.108.153c-.301.42-.664.758-1.086 1.009l-.265.142-.087.04a3.493 3.493 0 01-.302.118 4.117 4.117 0 01-1.33.208c-.524 0-.996-.067-1.438-.215-.614-.204-1.163-.56-1.726-1.116l-.227-.235c-.753-.812-1.534-1.976-2.493-3.586l-1.43-2.41-.544-.895-1.766 3.13-.343.592C7.597 19.156 6.227 20 4.356 20c-1.21 0-2.205-.42-2.936-1.182l-.168-.184c-.484-.573-.837-1.311-1.043-2.189l-.067-.32a8.69 8.69 0 01-.136-1.288L0 14.468c.002-.745.06-1.49.174-2.23l.1-.573c.298-1.53.828-2.958 1.536-4.157l.209-.34c1.177-1.83 2.789-3.053 4.615-3.16L6.897 4zm-.033 2.615l-.201.01c-.83.083-1.606.673-2.252 1.577l-.138.199-.01.018c-.67 1.017-1.185 2.378-1.456 3.845l-.004.022a12.591 12.591 0 00-.207 2.254l.002.188c.004.18.017.36.04.54l.043.291c.092.503.257.908.486 1.208l.117.137c.303.323.698.492 1.17.492 1.1 0 1.796-.676 3.696-3.641l2.175-3.4.454-.701-.139-.198C9.11 7.3 8.084 6.616 6.864 6.616zm10.196-.552l-.176.007c-.635.048-1.223.359-1.82.933l-.196.198c-.439.462-.887 1.064-1.367 1.807l.266.398c.18.274.362.56.55.858l.293.475 1.396 2.335.695 1.114c.583.926 1.03 1.6 1.408 2.082l.213.262c.282.326.529.54.777.673l.102.05c.227.1.457.138.718.138.176.002.35-.023.518-.073.338-.104.61-.32.813-.637l.095-.163.077-.162c.194-.459.29-1.06.29-1.785l-.006-.449c-.08-2.871-.938-5.372-2.2-6.798l-.176-.189c-.67-.683-1.444-1.074-2.27-1.074z"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#0081FB">MUSESPARK</div>
+  <div class="sub">Meta · 无限环</div>
+</div>
+<!-- ========== 11. MIMO ========== -->
+<div class="page" data-i="10">
+  <div class="logo-box">
+    <div class="glow" style="background:#FF6900"></div>
+    <svg viewBox="0 0 24 24" style="--gc:#FF6900">
+      <defs><filter id="f11"><feDropShadow stdDeviation=".5" flood-color="#FF6900" flood-opacity=".85"/>
+        <feDropShadow stdDeviation="1.8" flood-color="#FF6900" flood-opacity=".4"/></filter></defs>
+      <g filter="url(#f11)">
+        <path class="anim" stroke="#FF6900" stroke-width=".3" fill-rule="evenodd"
+          d="M.958 15.936a.459.459 0 01.459.44v2.729a.46.46 0 01-.918 0v-2.729a.459.459 0 01.459-.44zm4.814-2.035a.46.46 0 01.553.45v4.754a.458.458 0 11-.918 0V15.48L3.74 17.202a.462.462 0 01-.655.016.462.462 0 01-.065-.082L.628 14.67a.459.459 0 01.658-.637l2.124 2.187 2.127-2.188a.46.46 0 01.235-.13zm2.068.004a.46.46 0 01.458.445v4.755a.46.46 0 01-.458.458.459.459 0 01-.458-.458V14.35a.459.459 0 01.458-.445zm1.973 2.014a.46.46 0 01.46.457v2.729a.46.46 0 01-.784.324.46.46 0 01-.134-.324v-2.729a.46.46 0 01.458-.458zm.002-2.045a.458.458 0 01.328.157l2.127 2.19 2.125-2.19a.459.459 0 01.784.318v4.756a.46.46 0 01-.455.458.46.46 0 01-.458-.458V15.48l-1.667 1.723a.46.46 0 01-.65.008l-.005-.005c0-.002-.002-.002-.004-.003l-2.455-2.534a.46.46 0 01-.008-.667.461.461 0 01.338-.128zm6.797 1.206a.46.46 0 01.53.651A1.966 1.966 0 0019.81 18.4a.462.462 0 01.623.18.46.46 0 01-.181.624 2.863 2.863 0 01-1.38.353l-.142-.004a2.88 2.88 0 01-2.393-4.263.461.461 0 01.274-.21zm.864-.931a2.884 2.884 0 013.915 3.914.46.46 0 01-.402.24l-.057-.004a.458.458 0 01-.164-.055.46.46 0 01-.182-.622 1.967 1.967 0 00-2.669-2.67.459.459 0 11-.441-.803zM9.59 6.368c1.481 0 1.696 1.202 1.696 1.654v2.648h-.917v-.432c-.26.346-.792.535-1.36.535-.133 0-1.289-.03-1.384-1.136-.082-.932.675-1.61 2.053-1.61h.691c0-.563-.367-.886-.983-.886-.44.013-.864.174-1.2.458l-.36-.664c.484-.379 1.012-.567 1.764-.567zm4.427.1c1.263 0 2.082.97 2.083 2.15 0 1.181-.824 2.154-2.083 2.154-1.26 0-2.084-.972-2.084-2.152 0-1.18.82-2.153 2.084-2.153zm6.801.015c.68 0 1.202.465 1.197 1.548v2.642H21.1V8.29c0-.312-.002-.98-.63-.98s-.628.667-.628.838v2.524h-.89V8.148c0-.17-.001-.838-.63-.838-.628 0-.628.668-.628.98v2.383h-.917v-4.03h.917V7a1.22 1.22 0 01.947-.516c.398 0 .76.193.982.686a1.321 1.321 0 011.195-.686zm-18.093.872l1.457-1.772H5.32L3.311 8.07l2.14 2.602H4.24L2.725 8.796 1.21 10.672H0L2.138 8.07.13 5.583h1.138l1.458 1.772zm4.149 3.317h-.916V6.644h.916v4.028zm16.99 0h-.916V6.644h.916v4.028zM9.925 8.71c-1.055 0-1.359.412-1.326.742.032.329.324.537.757.537a1.013 1.013 0 001.014-.968l.002-.31h-.447zM14.018 7.3c-.663 0-1.184.487-1.184 1.32 0 .832.52 1.32 1.184 1.32.662 0 1.182-.49 1.182-1.32 0-.832-.52-1.32-1.182-1.32zM6.417 5.001a.568.568 0 01.587.582.588.588 0 01-1.175 0A.57.57 0 016.417 5zm16.991 0a.57.57 0 01.592.582.588.588 0 01-1.174 0 .57.57 0 01.357-.542.572.572 0 01.225-.04z"/>
+      </g>
+    </svg>
+  </div>
+  <div class="t" style="color:#FF6900">MIMO</div>
+  <div class="sub">Xiaomi MiMo · 小米</div>
+</div>
+
+<div id="tip">CLICK · 空格 · 方向键</div>
+
+<script>
+(function(){
+  var pages=[].slice.call(document.querySelectorAll('.page'));
+  var N=pages.length;
+  var bar=document.getElementById('bar');
+  var num=document.getElementById('num');
+  var flash=document.getElementById('flash');
+
+  /* 每个 logo 的绘制节奏：draw=单条路径绘制时长, stagger=多条路径之间的间隔 */
+  var CFG=[
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+    {draw:2.8, stagger:0},
+  ];
+  var FILL=1;      // 实心层不透明度
+  var OFF=1000;    // pathLength 归一化长度
+  /* 把品牌色朝白色提亮，做出霓虹「热芯」 */
+  function lift(hex,a){
+    var h=String(hex).replace('#','');
+    if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    if(h.length<6) return hex;
+    var r=parseInt(h.substr(0,2),16),g=parseInt(h.substr(2,2),16),b=parseInt(h.substr(4,2),16);
+    r=Math.round(r+(255-r)*a); g=Math.round(g+(255-g)*a); b=Math.round(b+(255-b)*a);
+    return 'rgb('+r+','+g+','+b+')';
+  }
+
+  var cur=-1, busy=false;
+
+  /* ---------- 背景粒子 ---------- */
+  (function(){
+    var box=document.getElementById('pts');
+    for(var i=0;i<16;i++){
+      var d=document.createElement('div');
+      d.className='dot';
+      d.style.cssText='left:'+(Math.random()*100)+'%;top:'+(Math.random()*100)+'%;'+
+        'width:'+(1+Math.random()*2)+'px;height:'+(1+Math.random()*2)+'px;'+
+        'animation-duration:'+(5+Math.random()*8)+'s;'+
+        'animation-delay:'+(-Math.random()*8)+'s';
+      box.appendChild(d);
+    }
+  })();
+
+  /* ---------- 构建：描边层 + 实心层 + HUD ---------- */
+  pages.forEach(function(page,i){
+    var svg=page.querySelector('.logo-box svg')||page.querySelector('svg');
+    var g=svg.querySelector('g');
+    // 颜色优先取 <svg style="--gc:...">，其次才是 <g stroke>（部分页面颜色写在 path 上）
+    var color=(svg.style.getPropertyValue('--gc')||'').trim()
+           || g.getAttribute('stroke') || '#7dd3fc';
+    var cfg=CFG[i]||CFG[0];
+
+    page.style.setProperty('--gc',color);
+    page.dataset.i=i;
+
+    // 霓虹发光靠 SVG 自带的 <filter>。
+    // CSS 的 filter 加在 SVG 根节点上会和外层视差 transform 冲突，导致整个 logo 不渲染。
+    var filt=svg.querySelector('filter');
+    var fid=filt?filt.getAttribute('id'):'';
+    if(filt){
+      var vb=(svg.getAttribute('viewBox')||'0 0 24 24').split(/[\s,]+/);
+      var vx=parseFloat(vb[0])||0, vy=parseFloat(vb[1])||0;
+      var vw=parseFloat(vb[2])||24, vh=parseFloat(vb[3])||vw;
+      var disp=svg.getBoundingClientRect().width||300;
+      var k=disp/vw||1;
+      // 四周留 6% 边距，图形不会顶到 HUD 角标
+      var pad=0.06*Math.max(vw,vh);
+      svg.setAttribute('viewBox',(vx-pad)+' '+(vy-pad)+' '+(vw+pad*2)+' '+(vh+pad*2));
+      k=disp/(vw+pad*2)||k;
+      filt.setAttribute('x','-60%');   filt.setAttribute('y','-60%');
+      filt.setAttribute('width','220%'); filt.setAttribute('height','220%');
+      var sh=filt.querySelectorAll('feDropShadow');
+      for(var q=0;q<sh.length;q++){
+        // feDropShadow 默认 dx/dy=2，在 24 单位的 viewBox 里会被放大成几十像素的偏移
+        sh[q].setAttribute('dx','0');
+        sh[q].setAttribute('dy','0');
+        // 模糊半径换算成屏幕像素，保证每个 logo 的光晕大小一致
+        sh[q].setAttribute('stdDeviation',String(q===0?5/k:17/k));
+        sh[q].setAttribute('flood-color',color);
+      }
+    }
+    g.removeAttribute('filter');
+    g.setAttribute('class','outline');
+    g.setAttribute('fill','none');
+    // 不在 <g> 上重复写 stroke：各页自带的颜色/线宽写在 <g> 或 <path> 上，覆盖会丢失
+    if(!g.getAttribute('stroke')&&!g.querySelector('path[stroke]')){
+      g.setAttribute('stroke',color);
+      g.setAttribute('stroke-width','1');
+    }
+
+    [].slice.call(g.querySelectorAll('path')).forEach(function(p,k){
+      p.setAttribute('pathLength',String(OFF));
+      p.classList.remove('anim');
+      p.style.transitionDelay=(k*(cfg.stagger||0))+'ms';
+    });
+
+    // 实心层：克隆描边层，改成填充
+    var solid=g.cloneNode(true);
+    solid.setAttribute('class','solid');
+    solid.removeAttribute('stroke');
+    solid.removeAttribute('stroke-width');
+    solid.setAttribute('fill',lift(color,.32));
+    solid.setAttribute('fill-opacity',String(FILL));
+    solid.style.transitionProperty='none';
+    solid.style.opacity='0';
+    [].slice.call(solid.querySelectorAll('path')).forEach(function(p){
+      p.removeAttribute('pathLength');
+      p.removeAttribute('class');
+      p.removeAttribute('stroke');
+      p.removeAttribute('stroke-width');
+      p.style.transitionDelay='';
+    });
+
+    // 用一个带 filter 的 <g> 同时罩住描边层和实心层，只做一次滤镜
+    if(fid){
+      var wrap=document.createElementNS('http://www.w3.org/2000/svg','g');
+      wrap.setAttribute('filter','url(#'+fid+')');
+      svg.insertBefore(wrap,g);
+      wrap.appendChild(g);
+      wrap.appendChild(solid);
+    }else{
+      svg.appendChild(solid);
+    }
+
+    // 扫描线 + 四角 + 序号
+    var box=page.querySelector('.logo-box');
+    var scan=document.createElement('div');
+    scan.className='scan';
+    box.appendChild(scan);
+    var idx=document.createElement('div');
+    idx.className='idx';
+    idx.textContent=(i+1<10?'0':'')+(i+1);
+    box.appendChild(idx);
+  });
+
+  /* ---------- 播放一个页面 ---------- */
+  function play(page){
+    var i=+page.dataset.i, cfg=CFG[i]||CFG[0];
+    var oPaths=[].slice.call(page.querySelectorAll('.outline path'));
+    var solid=page.querySelector('.solid');
+    var scan=page.querySelector('.scan');
+    clearTimeout(page._timer);
+
+    // 1) 复位到「未绘制」
+    oPaths.forEach(function(p){
+      p.style.transitionProperty='none';
+      p.style.transitionDuration='0s';
+      p.style.transitionDelay='0ms';
+      p.style.strokeDasharray=String(OFF);
+      p.style.strokeDashoffset=String(OFF);
+    });
+    solid.style.transitionProperty='none';
+    solid.style.transitionDuration='0s';
+    solid.style.opacity='0';
+    scan.classList.remove('go');
+    // 强制重排，让浏览器记住复位后的状态
+    void page.offsetWidth;
+
+    // 2) 描边逐条绘制
+    oPaths.forEach(function(p,k){
+      p.style.transitionProperty='stroke-dashoffset';
+      p.style.transitionDuration=cfg.draw+'s';
+      p.style.transitionDelay=(k*(cfg.stagger||0))+'ms';
+      p.style.transitionTimingFunction='cubic-bezier(.45,0,.25,1)';
+      p.style.strokeDashoffset='0';
+    });
+
+    // 3) 绘制结束 → 实心淡入 + 扫描线扫过
+    var wait=cfg.draw*1000+(oPaths.length-1)*(cfg.stagger||0)+80;
+    page._timer=setTimeout(function(){
+      if(!page.classList.contains('on')) return;
+      solid.style.transitionProperty='opacity';
+      solid.style.transitionDuration='.7s';
+      solid.style.transitionDelay='0ms';
+      solid.style.transitionTimingFunction='ease-out';
+      solid.style.opacity='1';
+      scan.classList.remove('go');
+      void scan.offsetWidth;
+      scan.classList.add('go');
+    },wait);
+  }
+
+  function show(idx){
+    pages.forEach(function(p,i){ p.classList.toggle('on',i===idx); });
+    bar.style.width=(N>1?(idx/(N-1))*100:0)+'%';
+    num.textContent=(idx+1<10?'0':'')+(idx+1)+' / '+(N<10?'0':'')+N;
+    play(pages[idx]);
+    cur=idx;
+  }
+
+  function go(dir){
+    if(busy) return;
+    var next=cur+dir;
+    if(next<0||next>=N) return;
+    busy=true;
+    flash.style.transition='none';
+    flash.style.opacity='.07';
+    void flash.offsetWidth;
+    flash.style.transition='opacity .35s ease';
+    flash.style.opacity='0';
+    show(next);
+    setTimeout(function(){ busy=false; },520);
+  }
+
+  /* ---------- 交互 ---------- */
+  document.addEventListener('click',function(){ go(1); });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='Enter'||e.key==='PageDown'){ e.preventDefault(); go(1); }
+    else if(e.key==='ArrowLeft'||e.key==='Backspace'||e.key==='PageUp'){ e.preventDefault(); go(-1); }
+  });
+  var tx=0;
+  document.addEventListener('touchstart',function(e){ tx=e.touches[0].clientX; },{passive:true});
+  document.addEventListener('touchend',function(e){
+    if(!e.changedTouches||!e.changedTouches.length) return;
+    var dx=e.changedTouches[0].clientX-tx;
+    if(Math.abs(dx)>50) go(dx<0?1:-1);
+  });
+
+  /* ---------- 鼠标视差 ---------- */
+  var boxes=[].slice.call(document.querySelectorAll('.logo-box'));
+  var mx=0,my=0,px=0,py=0;
+  document.addEventListener('mousemove',function(e){
+    mx=(e.clientX/window.innerWidth-.5)*2;
+    my=(e.clientY/window.innerHeight-.5)*2;
+  });
+  (function loop(){
+    px+=(mx-px)*.06;
+    py+=(my-py)*.06;
+    var t='translate3d('+(-px*9).toFixed(2)+'px,'+(-py*9).toFixed(2)+'px,0)';
+    for(var i=0;i<boxes.length;i++) boxes[i].style.transform=t;
+    requestAnimationFrame(loop);
+  })();
+
+  // 支持 #1~#11 深链直接进入某一页
+  var start=parseInt((location.hash||'').replace(/[^0-9]/g,''),10);
+  if(isNaN(start)) start=1;
+  start=Math.min(Math.max(start,1),N)-1;
+  // 等两帧再播放：否则首次加载时样式与初始样式合并，绘制动画不会触发
+  requestAnimationFrame(function(){
+    requestAnimationFrame(function(){ show(start); });
+  });
+})();
+</script>
+</body>
+</html>
