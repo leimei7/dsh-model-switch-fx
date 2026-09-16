@@ -80,6 +80,17 @@
 dsh plugin --profile web add github:leimei7/dsh-model-switch-fx
 ```
 
+> **这个插件零依赖、零构建，没有 `prepare` 脚本。**
+> 所以不会撞上 pnpm ≥10 拦截 git 依赖构建脚本那个坑
+> （DSH 在 `dsh plugin` 失败时会提示你去 `pnpm-workspace.yaml` 加 `allowBuilds` 白名单，
+> 这个插件不需要）。
+
+也可以用任意 git 地址或 `.git` 结尾的 URL：
+
+```bash
+dsh plugin --profile web add git+https://github.com/leimei7/dsh-model-switch-fx.git
+```
+
 ### 方式二：从 npm 装
 
 ```bash
