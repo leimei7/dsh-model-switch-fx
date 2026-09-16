@@ -106,6 +106,12 @@ dsh plugin --profile web add link:/绝对路径/dsh-model-switch-fx
 
 装完**重启 `dsh web`**（配置树在启动时组装），然后刷新页面。
 
+> **这是一个 Web UI 插件，必须装进带 `@deepseek-ai/dsh-web-app` 的 profile**（`web` 就是，
+> 它自带 `webServer` 服务）。装进 `tui` / `headless` 这类没有该服务的 profile，
+> 启动会失败并报 `dsh-model-switch-fx: pending (waiting for service: webServer)`
+> —— 这是 Cordis 的正常依赖行为，不是插件缺陷。
+> 同生态的 `dsh-whale-widget` 也是硬声明 `inject = ['webServer', ...]`。
+
 也可以不用 CLI，直接在 profile 的 `cordis.patch.yml` 里加：
 
 ```yaml
