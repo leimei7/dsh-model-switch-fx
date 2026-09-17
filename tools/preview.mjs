@@ -145,6 +145,25 @@ const server = createServer((req, res) => {
     return
   }
 
+  // 其余包内资源统一从 assets/ 取 —— 加新资源时不用再改这里
+  // （宿主半边在 lib/index.js 里按各自的路由提供，两边保持一致）
+  const assset = /^\/model-switch-fx\/([a-z0-9_-]+\.(?:png|wav|jpg|webp))$/.exec(path)
+  if (assset !== null) {
+    const type = { png: 'image/png', wav: 'audio/wav', jpg: 'image/jpeg', webp: 'image/webp' }
+    try {
+      const body = readFileSync(join(PACKAGE_ROOT, 'assets', assset[1]))
+      res.writeHead(200, {
+        'content-type': type[assset[1].split('.').pop()] ?? 'application/octet-stream',
+        'content-length': String(body.length),
+      })
+      res.end(body)
+    } catch {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('asset not found')
+    }
+    return
+  }
+
   res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
   res.end('not found')
 })
