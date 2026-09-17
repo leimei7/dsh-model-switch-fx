@@ -296,5 +296,31 @@ console.log('\n[11] 播放指令必须带上启动音的开关与音量')
   check('config.fx=false 传下去了', p?.fx === false, JSON.stringify(p?.fx))
 }
 
+console.log('\n[12] 只调 reasoning effort 不该弹过场（那不算换模型）')
+{
+  const { routes, emit } = makeCtx()
+  const sse = openSse(routes.get('/model-switch-fx/events'))
+  const gpt = route('openai', 'gpt-5')
+  const claude = route('anthropic', 'claude-sonnet-4')
+  const n = () => plays(sse).length
+
+  emit(session, { lastUsed: null, pending: gpt })
+  check('首次选择 → 播', n() === 1, `已播 ${n()}`)
+
+  // 改 low/high/max 会写一条 model/selection，但 provider/model 没变
+  emit(session, { lastUsed: gpt, pending: gpt })
+  check('只调 effort（同 provider/model）→ 不播', n() === 1, `已播 ${n()}`)
+
+  emit(session, { lastUsed: gpt, pending: gpt })
+  check('重复点同一个模型 → 不播', n() === 1, `已播 ${n()}`)
+
+  emit(session, { lastUsed: gpt, pending: claude })
+  check('换到别的模型 → 播', n() === 2, `已播 ${n()}`)
+
+  // 连切两次、中间没发请求（lastUsed 还是旧值）→ 也要各播一次
+  emit(session, { lastUsed: gpt, pending: route('google', 'gemini-2.5-pro') })
+  check('连切第二次（lastUsed 未更新）→ 仍播', n() === 3, `已播 ${n()}`)
+}
+
 console.log(`\n结果: ${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

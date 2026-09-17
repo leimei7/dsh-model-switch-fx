@@ -82,11 +82,15 @@ for (const block of blocks) {
     if (d === undefined) throw new Error(`path without d for ${title}`)
     const tf = attr(a, 'transform')
     const rotMatch = tf === undefined ? null : /rotate\(\s*(-?[\d.]+)/.exec(tf)
+    // 逐路径颜色：默认全用 --gc，但多色徽标（如豆包=蓝/青/紫）要能各自指定。
+    // 与 --gc 相同就当没写，避免数据里塞一堆冗余字段。
+    const own = attr(a, 'stroke')
     return {
       d,
       rotate: rotMatch === null ? 0 : Number(rotMatch[1]),
       width: Number(attr(a, 'stroke-width') ?? groupSw ?? '1'),
       rule: attr(a, 'fill-rule'),
+      color: own === undefined || own.toLowerCase() === color.toLowerCase() ? undefined : own,
     }
   })
   if (raw.length === 0) throw new Error(`no paths for ${title}`)
@@ -109,6 +113,7 @@ for (const block of blocks) {
     for (const p of raw) {
       const shape = { d: p.d }
       if (p.rule !== undefined) shape.rule = p.rule
+      if (p.color !== undefined) shape.color = p.color
       paths.push(shape)
     }
   }

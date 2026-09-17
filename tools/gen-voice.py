@@ -113,8 +113,12 @@ def chorus(sig, sr, delay_ms=9, depth_ms=0.4, rate=0.6, mix=0.4, phase=0.0):
     return sig * (1 - mix) + wet * mix
 
 
-def process(y, sr):
-    """甜美忧郁后期处理。"""
+def process(y, sr, tail_ms=None, fade_ms=140):
+    """甜美忧郁后期处理。
+
+    `tail_ms` 让混响尾巴自然衰减出来（None = 自动：原长的 10%，至少 250ms）；
+    `fade_ms` 在末尾做淡出，保证任何情况下都不会硬切。
+    """
     y = y.astype(np.float32)
     if y.dtype == np.int16 or np.abs(y).max() > 1.5:
         y = y / 32768.0
@@ -144,11 +148,29 @@ def process(y, sr):
         imp = rng.standard_normal(n) * np.exp(-decay * t)
         return sosfilt(butter(2, dark, btype="low", fs=sr, output="sos"), imp)
 
-    wet1 = fftconvolve(x, dark_verb(1.8, 5.5, 3000))[:len(x)]
-    wet1 /= np.abs(wet1).max()
-    wet2 = fftconvolve(x, dark_verb(3.5, 2.8, 1400))[:len(x)]
-    wet2 /= np.abs(wet2).max()
-    x = x * 0.78 + wet1 * 0.16 + wet2 * 0.12
+    wet1 = fftconvolve(x, dark_verb(1.8, 5.5, 3000))
+    wet2 = fftconvolve(x, dark_verb(3.5, 2.8, 1400))
+
+    # 让混响尾巴**自然衰减出来**，不再 [:len(x)] 硬截。
+    # 原来那一刀会把尾巴砍掉；碰上原录音本身就是硬切的（豆包那段最后 50ms
+    # 还有 -15dB），听起来就是"结束得急急忙忙"。
+    extra_ms = tail_ms if tail_ms is not None else max(250.0, len(x) / sr * 1000 * 0.10)
+    L = len(x) + int(sr * extra_ms / 1000)
+
+    dry = np.zeros(L)
+    dry[:len(x)] = x
+    w1 = np.zeros(L)
+    w1[:min(L, len(wet1))] = wet1[:L]
+    w2 = np.zeros(L)
+    w2[:min(L, len(wet2))] = wet2[:L]
+    w1 /= (np.abs(w1).max() + 1e-9)
+    w2 /= (np.abs(w2).max() + 1e-9)
+    x = dry * 0.78 + w1 * 0.16 + w2 * 0.12
+
+    # 末尾淡出 —— 原录音被硬切时这一步是关键，否则就是"啪"地断掉
+    k = int(sr * fade_ms / 1000)
+    if 0 < k < L:
+        x[-k:] *= np.linspace(1.0, 0.0, k) ** 1.5
 
     return x / (np.abs(x).max() + 1e-9) * 0.92
 
@@ -207,6 +229,10 @@ def main():
     ap.add_argument("--raw", action="store_true", help="跳过后期处理，只做响度归一化")
     ap.add_argument("--no-normalize", action="store_true", help="连响度归一化也跳过")
     ap.add_argument("--out", help="输出路径（默认 assets/<name>.mp3）")
+    ap.add_argument("--tail-ms", type=float,
+                    help="混响尾巴长度（毫秒）。默认按原长 10%%、至少 250ms")
+    ap.add_argument("--fade-ms", type=float, default=140,
+                    help="末尾淡出时长（毫秒），默认 140")
     args = ap.parse_args()
 
     if args.list:
@@ -245,8 +271,10 @@ def main():
             x = x.mean(axis=1)
         x = x / (np.abs(x).max() + 1e-9) * 0.92
     else:
-        print("  后期处理: 合唱×2 → EQ → 轻饱和 → 暗色混响×2")
-        x = process(y, sr)
+        print(f"  后期处理: 合唱×2 → EQ → 轻饱和 → 暗色混响×2 "
+              f"(尾巴 {args.tail_ms if args.tail_ms is not None else 'auto'}ms, "
+              f"淡出 {args.fade_ms}ms)")
+        x = process(y, sr, tail_ms=args.tail_ms, fade_ms=args.fade_ms)
     wavfile.write(tmp_proc, sr, (x * 32767).astype(np.int16))
 
     # 3) 响度归一化到与现有 11 段一致
