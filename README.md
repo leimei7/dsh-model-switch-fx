@@ -315,6 +315,9 @@ tools/
   probe-frames.mjs   逐帧状态探针（查「闪一帧」这类单帧问题）
   dense-capture.mjs  按固定间隔密集抓帧
   shot-fx.mjs        对预览页做实时截图
+  verify-grain.mjs   验证颗粒层真的在渲染（对比开/关的像素标准差）
+  sfx-lab.html       8-bit 启动音试听页（浏览器直接打开）
+  verify-sfx.mjs     校验试听页的合成结果（音高 / 傅里叶级数 / 音高映射单调性）
 ```
 
 ## 开发与测试
