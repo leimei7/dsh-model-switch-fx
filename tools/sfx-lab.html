@@ -57,17 +57,26 @@
 
 /* ── 脉冲波：直接按傅里叶级数构造 ───────────────────────────────────────── */
 const HARMONICS = 48
-const waveCache = new Map()
+/** 统一采样率，别让离线渲染和分析对不上。 */
+const SR = 48000
+/**
+ * PeriodicWave 是**绑定到创建它的 AudioContext** 的。
+ * 跨 context 复用会得到错误的音高 —— 实测：在 44100Hz 的 context 里建的波，
+ * 拿到 48000Hz 的 context 里播，音高会整体乘 48000/44100 ≈ 1.088（高约 1.5 个半音）。
+ * 所以按 context 分开缓存（WeakMap，context 释放后缓存自动回收）。
+ */
+const waveCache = new WeakMap()
 function pulseWave(ctx, duty) {
-  const key = duty
-  if (waveCache.has(key)) return waveCache.get(key)
+  let byDuty = waveCache.get(ctx)
+  if (byDuty === undefined) { byDuty = new Map(); waveCache.set(ctx, byDuty) }
+  if (byDuty.has(duty)) return byDuty.get(duty)
   const real = new Float32Array(HARMONICS + 1)
   const imag = new Float32Array(HARMONICS + 1)
   for (let n = 1; n <= HARMONICS; n++) {
     imag[n] = (2 / (n * Math.PI)) * Math.sin(n * Math.PI * duty)
   }
   const w = ctx.createPeriodicWave(real, imag, { disableNormalization: false })
-  waveCache.set(key, w)
+  byDuty.set(duty, w)
   return w
 }
 
@@ -210,7 +219,7 @@ async function play() {
 /** 离线渲染同一段旋律，画包络 —— 顺便当客观校验用。 */
 async function draw(m, root) {
   const dur = (m.deg.length - 1) * m.step + m.len + 0.06
-  const off = new OfflineAudioContext(1, Math.ceil(44100 * dur), 44100)
+  const off = new OfflineAudioContext(1, Math.ceil(SR * dur), SR)
   const g = off.createGain()
   g.gain.value = 0.9
   g.connect(off.destination)
@@ -240,19 +249,32 @@ async function draw(m, root) {
 
 /* 给自动化校验用 */
 window.__lab = {
-  MELODIES, CHARS, charRoot, hz, quantize, pulseWave, schedule, draw,
-  async render(melId, dutyV, rootHz) {
+  MELODIES, CHARS, charRoot, hz, quantize, pulseWave, schedule, draw, SR,
+  async render(melId, dutyV, rootHz, sr) {
+    const rate = sr || SR
     const m = MELODIES.find((x) => x.id === melId)
     const dur = (m.deg.length - 1) * m.step + m.len + 0.06
-    const off = new OfflineAudioContext(1, Math.ceil(48000 * dur), 48000)
+    const off = new OfflineAudioContext(1, Math.ceil(rate * dur), rate)
     const g = off.createGain(); g.gain.value = 1; g.connect(off.destination)
     schedule(off, g, m, rootHz, dutyV, 0.9)
     const b = await off.startRendering()
     return Array.from(b.getChannelData(0))
   },
+  /** 在指定采样率的 context 里渲染一个纯音，用来验证跨 context 的音高一致性。 */
+  async tone(dutyV, freq, sr) {
+    const off = new OfflineAudioContext(1, sr, sr)
+    const g = off.createGain(); g.gain.value = 1; g.connect(off.destination)
+    const w = pulseWave(off, dutyV)
+    const o = off.createOscillator(); o.setPeriodicWave(w); o.frequency.value = freq
+    o.connect(g); o.start(0); o.stop(sr / 48000 * 0.9)
+    const b = await off.startRendering()
+    return Array.from(b.getChannelData(0))
+  },
 }
 
-play()
+/* 首屏只画波形、不出声 —— AudioContext 要用户手势之后才能 resume，
+   这里自动播会得到一个 rejected promise 和控制台报错。 */
+draw(MELODIES[0], charRoot(CHARS[char]))
 </script>
 </body>
 </html>

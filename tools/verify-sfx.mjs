@@ -65,21 +65,36 @@ const evalIn = async (expression, awaitPromise = false) => {
 /* ── 在 Node 里做 DSP ─────────────────────────────────────────────────── */
 const rms = (a) => Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length)
 
-/** 自相关测基频。 */
+/**
+ * 自相关测基频。
+ *
+ * 两个陷阱都要躲开：
+ *   - 只取全局最大值 → 周期信号在 2×周期处同样有峰，会得到**低八度**（500Hz 量成 250Hz）
+ *   - 只用「第一个超过 x×最大值」的阈值 → 会落在峰的肩膀上（500Hz 量成 516Hz）
+ * 所以取「**第一个达到 0.9×最大值、且是局部峰**」的那个 lag。
+ */
 function pitch(a, sr) {
   const n = Math.min(a.length, Math.floor(sr * 0.03))
   const seg = a.slice(0, n)
   const mean = seg.reduce((s, v) => s + v, 0) / n
   const x = seg.map((v) => v - mean)
   const lo = Math.floor(sr / 2000), hi = Math.floor(sr / 150)
-  let best = -1, bestLag = 0
-  for (let lag = lo; lag <= hi && lag < x.length; lag++) {
+  if (hi + 1 >= x.length) return 0
+  const ac = new Float64Array(hi + 2)
+  let best = 0
+  for (let lag = lo; lag <= hi; lag++) {
     let s = 0
     for (let i = 0; i + lag < x.length; i++) s += x[i] * x[i + lag]
-    s /= x.length - lag
-    if (s > best) { best = s; bestLag = lag }
+    ac[lag] = s / (x.length - lag)
+    if (ac[lag] > best) best = ac[lag]
   }
-  return bestLag > 0 ? sr / bestLag : 0
+  if (best <= 0) return 0
+  for (let lag = lo + 1; lag < hi; lag++) {
+    if (ac[lag] >= best * 0.9 && ac[lag] >= ac[lag - 1] && ac[lag] >= ac[lag + 1]) {
+      return sr / lag
+    }
+  }
+  return 0
 }
 
 /** 指定频率处的幅度（Goertzel）。 */
@@ -164,6 +179,22 @@ for (const d of [0.5, 0.25, 0.125]) {
   console.log('      ' + h.map((x) => `h${x.n}:${x.measured.toFixed(3)}/${x.theory.toFixed(3)}`).join('  '))
 }
 
+console.log('\n[2b] 跨采样率的音高一致性')
+console.log('     （回归：PeriodicWave 绑定创建它的 AudioContext，跨 context 复用会让音高整体乘采样率比）')
+{
+  const got = {}
+  for (const sr of [44100, 48000]) {
+    const a = JSON.parse(await evalIn(
+      `window.__lab.tone(0.5, 500, ${sr}).then(x=>JSON.stringify(x))`, true))
+    const from = Math.floor(sr * 0.15)
+    got[sr] = pitch(a.slice(from, from + Math.floor(sr * 0.05)), sr)
+  }
+  const err = Math.abs(got[48000] - got[44100]) / 500
+  chk(err < 0.02,
+    `44100Hz / 48000Hz 渲染同一音高一致（${Math.round(got[44100])}Hz / ${Math.round(got[48000])}Hz，目标 500Hz）`)
+  chk(Math.abs(got[48000] - 500) / 500 < 0.02, `绝对音高正确（${Math.round(got[48000])}Hz，目标 500Hz）`)
+}
+
 console.log('\n[3] 各角色根音（F0 单调映射到 A4~E5 后量化）')
 const chars = JSON.parse(await evalIn('JSON.stringify(window.__lab.CHARS)'))
 for (const [id, f0] of Object.entries(chars)) {
@@ -198,6 +229,28 @@ chk(spread < 12, `根音跨度 ${spread.toFixed(2)} 个半音（< 1 个八度 = 
     }
   }
   chk(inversions === 0, `单调性：${inversions} 处逆序（F0 更低却给了更高的根音）`)
+}
+
+console.log('\n[4] 试听页 UI 是否正常渲染')
+await sleep(800)
+{
+  const ui = JSON.parse(await evalIn(`JSON.stringify({
+    duty: document.querySelectorAll('#duty button').length,
+    rows: document.querySelectorAll('#mel tr').length,
+    chars: document.querySelectorAll('#chars button').length,
+    canvas: (function(){
+      const c = document.getElementById('wave')
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data
+      let lit = 0
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) lit++
+      return lit
+    })(),
+    title: document.title,
+  })`))
+  chk(ui.duty === 4, `占空比按钮 ${ui.duty}/4`)
+  chk(ui.rows === 5, `旋律候选 ${ui.rows}/5`)
+  chk(ui.chars === 11, `角色按钮 ${ui.chars}/11`)
+  chk(ui.canvas > 1000, `首屏波形已绘制（${ui.canvas} 个不透明像素）`)
 }
 
 console.log(`\n结果: ${pass} passed, ${fail} failed\n`)
