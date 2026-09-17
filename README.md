@@ -96,22 +96,28 @@ dsh plugin --profile web add github:leimei7/dsh-model-switch-fx
 dsh plugin --profile web add git+https://github.com/leimei7/dsh-model-switch-fx.git
 ```
 
-### 方式二：从 npm 装
+装完**重启 `dsh web`**（配置树在启动时组装），然后刷新页面。
 
-```bash
-dsh plugin --profile web add dsh-model-switch-fx
-```
+**不需要手改 profile 配置。** 插件在自己的 `package.json` 里声明了
+`dsh.bundle.patch`，`dsh plugin add` 会读它并自动挂载。
 
-### 方式三：本地开发
+> 这个插件零依赖、零构建，没有 `prepare` / `postinstall` 之类的构建期钩子，
+> 所以不会撞上 pnpm ≥ 10 拦截 git 依赖构建脚本的问题。
+> （DSH 在 `dsh plugin` 失败时会提示你去 `pnpm-workspace.yaml` 加 `allowBuilds` 白名单，
+> 这个插件不需要。）
+
+### 方式二：本地 / 离线
 
 ```bash
 git clone https://github.com/leimei7/dsh-model-switch-fx.git
 dsh plugin --profile web add link:/绝对路径/dsh-model-switch-fx
 ```
 
-装完**重启 `dsh web`**（配置树在启动时组装），然后刷新页面。
+`link:` 装的是活目录 —— 改了源码重启即生效，适合改着玩。
 
-也可以不用 CLI，直接在 profile 的 `cordis.patch.yml` 里加：
+### 方式三：手动挂载
+
+不用 CLI 的话，直接在 profile 的 `cordis.patch.yml` 里加：
 
 ```yaml
 - insert:
@@ -119,27 +125,26 @@ dsh plugin --profile web add link:/绝对路径/dsh-model-switch-fx
       name: 'dsh-model-switch-fx'
 ```
 
+> 暂未发布到 npm，请用上面两种方式。包本身是按可发布准备的
+> （没有 `private` 标记、`files` 白名单齐全），需要的话 `npm publish` 即可。
+
 ### 卸载
 
 ```bash
 dsh plugin --profile web remove dsh-model-switch-fx
 ```
 
-### 两个注意点
+### 一个注意点：必须装进带 Web UI 的 profile
 
-**必须装进带 Web UI 的 profile。** 这是个 Web 插件，硬依赖 `webServer` 服务
-（`web` profile 自带，因为它包含 `@deepseek-ai/dsh-web-app`）。装进 `tui` /
-`headless` 这类没有该服务的 profile，启动会失败并报：
+这是个 Web 插件，硬依赖 `webServer` 服务（`web` profile 自带，因为它包含
+`@deepseek-ai/dsh-web-app`）。装进 `tui` / `headless` 这类没有该服务的 profile，
+启动会失败并报：
 
 ```
 dsh-model-switch-fx: pending (waiting for service: webServer)
 ```
 
 这是 Cordis 的正常依赖行为，不是插件缺陷。
-
-**这个插件零依赖、零构建，没有 `prepare` 脚本。** 所以不会撞上 pnpm ≥ 10
-拦截 git 依赖构建脚本的问题（DSH 在 `dsh plugin` 失败时会提示去
-`pnpm-workspace.yaml` 加 `allowBuilds` 白名单，这个插件不需要）。
 
 ---
 

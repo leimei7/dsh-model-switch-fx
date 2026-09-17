@@ -4,18 +4,23 @@
 # 本文件是插件的挂载声明。DSH 启动时按 bundle 层栈叠加各插件 patch，
 # 这一条把插件行插入 Web profile 的配置树。
 #
-# 安装（本地开发）：
-#   dsh plugin --profile web add link:<本目录绝对路径>
-# 或直接在本 profile 的 cordis.patch.yml 里手写同样的 insert。
+# 装了不用手改这里 —— `dsh plugin add` 会读 package.json 的 dsh.bundle.patch
+# 自动应用本文件。下面只是把可配置项列出来备查。
 #
-# 可配置项（都可省略）：
+# 安装：
+#   dsh plugin --profile web add github:leimei7/dsh-model-switch-fx
+# 装完记得重启 dsh web（配置树在启动时组装）。
+#
+# 可配置项（全部可省略）：
 #   - insert:
 #       - id: model-switch-fx
 #         name: 'dsh-model-switch-fx'
 #         config:
-#           enabled: true        # 关掉动画但保留插件
-#           volume: 0.9          # 语音音量 0~1
-#           timeoutSlackMs: 2500 # 浏览器回报丢失时的兜底等待
+#           enabled: true      # false = 整个动画关掉
+#           volume: 0.9        # 语音音量 0~1
+#           sfx: true          # 启动音开关
+#           sfxVolume: 0.5     # 启动音音量 0~1
+#           fx: true           # 复古未来音频链开关
 # ============================================================================
 
 - insert:
