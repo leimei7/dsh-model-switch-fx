@@ -118,48 +118,59 @@ const CANDS = JSON.parse(await evalIn('JSON.stringify(window.__lab.CANDIDATES)')
 console.log('\n[1] 每个候选：非静音 / 不削顶 / 总时长 250-400ms')
 const CEIL = 0.95
 const gainMap = JSON.parse(await evalIn('JSON.stringify(window.__lab.GAIN)'))
-const rawList = []
 for (const c of CANDS) {
   const a = await render(`window.__lab.render(${JSON.stringify(c.id)}, null, ${C5})`)
   const evs = c.voices.flatMap((v) => v.events)
   const total = Math.max(...evs.map((e) => e[1] + e[2]))
   const amp = rms(a), pk = peakOf(a)
-  const g = gainMap[c.id] ?? 1
-  // 反推「未归一化」的原始值，用来算推荐增益
-  rawList.push({ id: c.id, name: c.name, rawRms: amp / g, rawPeak: pk / g })
   const voices = c.voices.length
   const noise = c.voices.some((v) => v.kind === 'noise')
   const glide = evs.some((e) => e.length > 3)
   console.log(`   ${c.name}  ${total}ms  ${voices}声部${noise ? '+噪声' : ''}${glide ? '+滑音' : ''}`
     + `  duty ${(c.duty * 100).toFixed(1).replace(/\.0$/, '')}%  RMS ${amp.toFixed(3)}  峰值 ${pk.toFixed(3)}`
-    + `  (gain ${g})`)
+    + `  (gain ${gainMap[c.id] ?? 1})`)
   chk(amp > 0.02, `${c.name.padEnd(9)} 非静音`)
   chk(pk < 0.99, `${c.name.padEnd(9)} 不削顶（峰值 ${pk.toFixed(3)}）`)
   chk(total >= 250 && total <= 400, `${c.name.padEnd(9)} 总时长 ${total}ms 在 250-400ms 内`)
 }
 {
-  // 切角色时听感音量要一致 —— 跟语音那批做响度归一化是同一个道理。
-  // 做法：每个候选不削顶能到的最大增益 = CEIL/rawPeak；在该增益下的 RMS 就是它
-  // 「能有多响」的上限。取所有候选里最小的那个作为统一目标 —— 于是谁都不削顶，
-  // 且响度完全一致。（峰值受限的候选会拖低整体，所以下面把推荐值打出来。）
-  const achievable = rawList.map((r) => ({ ...r, maxGain: CEIL / r.rawPeak }))
-  const target = Math.min(...achievable.map((r) => r.rawRms * r.maxGain))
-  console.log(`\n   统一目标 RMS = ${target.toFixed(3)}（等于「最吃亏」那个候选能到的上限）`)
-  console.log('   推荐 GAIN（直接填回 sfx-lab.html 的 GAIN 表）：')
+  // 位深缩减是**非线性**环节（量化器）：crush(g·x) ≠ g·crush(x)，
+  // 所以「测得峰值 ÷ 当前增益」推不出原始峰值 —— 必须在**增益 1 处直接测量**。
+  //   干净信号（bits=0）→ 峰值与增益严格成正比，用它算峰值上限
+  //   量化后信号（bits=B）→ 用它算响度
+  const bitsNow = await evalIn('window.__lab.gritBits')
+  const cleanList = [], crushedList = []
+  for (const c of CANDS) {
+    const clean = await render(`window.__lab.render(${JSON.stringify(c.id)}, null, ${C5}, 48000, 0, true)`)
+    const crushed = await render(
+      `window.__lab.render(${JSON.stringify(c.id)}, null, ${C5}, 48000, ${bitsNow}, true)`)
+    cleanList.push({ id: c.id, name: c.name, peak: peakOf(clean) })
+    crushedList.push({ id: c.id, name: c.name, rms: rms(crushed), peak: peakOf(crushed) })
+  }
+  // 峰值上限留出量化台阶的余量：32 级时最高一级的门槛在 ~0.968
+  const topStep = 1 - 1 / (Math.pow(2, bitsNow) - 1)
+  const peakCap = Math.min(CEIL, topStep - 0.002)
+  const gainMap2 = JSON.parse(await evalIn('JSON.stringify(window.__lab.GAIN)'))
+  const rows = cleanList.map((c, i) => {
+    const maxGain = peakCap / c.peak
+    return { ...c, rms: crushedList[i].rms, maxGain, achievable: crushedList[i].rms * maxGain }
+  })
+  const target = Math.min(...rows.map((r) => r.achievable))
+  console.log(`\n   峰值上限 ${peakCap.toFixed(3)}（${bitsNow}bit 量化后最高一级门槛 ${topStep.toFixed(3)}）`)
+  console.log(`   统一目标 RMS = ${target.toFixed(3)}`)
+  console.log('   推荐 GAIN（向下取整，直接填回 sfx-lab.html 的 GAIN 表）：')
   const rec = {}
-  for (const r of achievable) {
-    rec[r.id] = +(target / r.rawRms).toFixed(3)
-    const peakAt = r.rawRms * rec[r.id] / r.rawPeak
-    const crest = 20 * Math.log10(r.rawPeak / r.rawRms)
+  for (const r of rows) {
+    rec[r.id] = Math.floor(Math.min(target / r.rms, r.maxGain) * 1000) / 1000
     console.log(`      ${r.id.padEnd(9)} ${String(rec[r.id]).padStart(6)}   `
-      + `(峰值→${(r.rawPeak * rec[r.id]).toFixed(3)}  波峰因数 ${crest.toFixed(1)}dB)`)
+      + `(干净峰值 ${r.peak.toFixed(3)} × gain = ${(r.peak * rec[r.id]).toFixed(3)})`)
   }
   console.log('   ' + JSON.stringify(rec))
-  const dB = 20 * Math.log10(Math.max(...rawList.map((r) => r.rawRms * (gainMap[r.id] ?? 1)))
-    / Math.min(...rawList.map((r) => r.rawRms * (gainMap[r.id] ?? 1))))
-  chk(dB < 3, `11 个候选响度一致（极差 ${dB.toFixed(2)} dB < 3）`)
-  chk(achievable.every((r) => r.rawPeak * rec[r.id] <= CEIL + 1e-6),
-    `按推荐值归一化后谁都不削顶（峰值上限 ${CEIL}）`)
+  const dbNow = 20 * Math.log10(
+    Math.max(...crushedList.map((c, i) => c.rms * (gainMap2[c.id] ?? 1)))
+    / Math.min(...crushedList.map((c, i) => c.rms * (gainMap2[c.id] ?? 1))))
+  chk(dbNow < 3, `11 个候选响度一致（极差 ${dbNow.toFixed(2)} dB < 3）`)
+  chk(crushedList.every((c) => c.rms > 0.02), '所有候选量化后仍非静音')
 }
 
 /* [2] 傅里叶级数 ─────────────────────────────────────────────────────── */
@@ -263,6 +274,41 @@ console.log('\n[5] 跨采样率音高一致（回归：PeriodicWave 不能跨 Au
   chk(Math.abs(got[48000] - got[44100]) / 500 < 0.02,
     `44100 / 48000 渲染同一音高一致（${Math.round(got[44100])} / ${Math.round(got[48000])}Hz，目标 500Hz）`)
   chk(Math.abs(got[48000] - 500) / 500 < 0.02, `绝对音高正确（${Math.round(got[48000])}Hz）`)
+}
+
+/* [5b] 毛刺感 ───────────────────────────────────────────────────────── */
+console.log('\n[5b] 毛刺/数码味：位深缩减（bit-crush）与 16 级音量台阶')
+{
+  const bits = await evalIn('window.__lab.gritBits')
+  const steps = await evalIn('window.__lab.VOLUME_STEPS')
+  console.log(`   当前输出位深 ${bits} bit（${Math.pow(2, bits)} 级），音量级数 ${steps}`)
+  // 位深缩减最直接的可验证性质：输出采样值的**不同取值个数**会塌缩
+  const count = (a) => {
+    const s = new Set()
+    for (const v of a) s.add(Math.round(v * 4096))
+    return s.size
+  }
+  const clean = await render(`window.__lab.render('ready', null, ${C5}, 48000, 0)`)
+  const crushed = await render(`window.__lab.render('ready', null, ${C5}, 48000, ${bits})`)
+  const nClean = count(clean), nCrushed = count(crushed)
+  console.log(`   不同采样值个数：关掉 ${nClean} → ${bits}bit ${nCrushed}`)
+  chk(nCrushed < nClean / 3,
+    `位深缩减真的生效（取值个数 ${nClean} → ${nCrushed}，塌缩到 ${(nCrushed / nClean * 100).toFixed(0)}%）`)
+
+  // 音量台阶：16 级离散步进 → 包络不该是平滑的一段
+  const levels = await evalIn(`(function(){
+    var seen = {}
+    var g = { gain: {
+      setValueAtTime: function (v) { seen[Math.round(v * 10000)] = 1 },
+      linearRampToValueAtTime: function () {},
+      exponentialRampToValueAtTime: function () {},
+    } }
+    window.__lab.steppedEnvelope(g, 0, 0.3, 0.9)
+    return Object.keys(seen).length
+  })()`)
+  console.log(`   steppedEnvelope 对 300ms 音排了 ${levels} 个不同增益值`)
+  chk(levels >= 4 && levels <= steps,
+    `包络是离散台阶（${levels} 级，介于 4 与 ${steps} 之间）—— 不是平滑 ramp`)
 }
 
 /* [6] 角色根音单调 ───────────────────────────────────────────────────── */

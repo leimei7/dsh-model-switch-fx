@@ -50,6 +50,15 @@
   <button class="big" id="playAll">▶ 依次播放全部 11 个（判断是否够不同）</button>
 </div>
 
+<h2>毛刺感 / 数码味（位深缩减）</h2>
+<p class="note" style="margin-bottom:8px">
+  Web Audio 的方波是<b>带限</b>的（抗混叠），比真机干净太多。真机 2A03 的 DAC 粗糙，
+  那种毛刺正是芯片音的一部分 —— 这里用<b>位深缩减</b>把它加回来。
+  另外包络已按 2A03 的做法改成<b>16 级音量逐帧硬切</b>（台阶感是刻意的）。
+  改完听着合适就告诉我，我把这个值同步进插件（当前插件里是 <code>5 bit</code>）。
+</p>
+<div class="row" id="grit"></div>
+
 <h2>角色 → 启动音（点「试听」听它自己的那一个）</h2>
 <table>
   <thead><tr><th>角色</th><th>声线 F0</th><th>根音</th><th>分配方案</th><th>结构</th><th></th></tr></thead>
@@ -228,9 +237,9 @@ const CANDIDATES = [
  * **改动方案后必须重新测量**：跑一次 verify-sfx.mjs，它会打印新的 GAIN 表。
  */
 const GAIN = {
-  ready: 0.642, disk: 0.861, ensemble: 0.296, call: 0.39,
-  arch: 0.728, stab: 0.762, horn: 0.362, glide: 0.518,
-  zigzag: 0.629, stepwise: 0.566, single: 1.069, poise: 0.671,
+  ready: 0.701, disk: 0.93, ensemble: 0.355, call: 0.48,
+  arch: 0.805, stab: 0.769, horn: 0.419, glide: 0.629,
+  zigzag: 0.625, stepwise: 0.606, single: 1.004, poise: 0.733,
 }
 
 /* ── 角色 → 方案的分配（一一对应，不重复）────────────────────────────── */
@@ -272,12 +281,59 @@ function hz(name) {
 function quantize(f) { return 440 * Math.pow(2, Math.round(12 * Math.log2(f / 440)) / 12) }
 
 /* ── 合成 ───────────────────────────────────────────────────────────────
-   包络按 2A03 惯用法：起音 0~2 帧 + 衰减 2~6 帧 @60Hz，末端硬截断。
+   包络按 2A03 的做法：起音 1~2 帧拉满，之后 **16 级音量逐帧硬切**（台阶感要留着，
+   平滑的指数尾巴听起来太干净）；输出再走一层位深缩减制造「毛刺/数码味」。
    三角 1.4×（谐波少、感知响度弱）；噪声 0.5×。
    ──────────────────────────────────────────────────────────────────────── */
 const VOICE_GAIN = { pulse: 1.0, triangle: 1.4, noise: 0.5 }
 const ATTACK_S = 0.003
-const DECAY_S = 0.075
+const VOLUME_STEPS = 16
+const FRAME_S = 1 / 60
+/** 输出位深（bit-crush）。0 = 关掉。5 bit = 32 级。 */
+let gritBits = 5
+let crushCache = {}
+
+/** 位深缩减曲线：把信号量化成 2^bits 级。 */
+function crushCurve(bits) {
+  const n = 8192
+  const curve = new Float32Array(n)
+  const levels = Math.pow(2, bits) - 1
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1
+    curve[i] = (Math.round(((x + 1) / 2) * levels) / levels) * 2 - 1
+  }
+  return curve
+}
+
+/** 16 级音量逐帧硬切。 */
+function steppedEnvelope(g, at, len, peak) {
+  if (!(len > 0)) { g.gain.setValueAtTime(0, at); return }
+  const steps = Math.max(2, Math.min(24, Math.round(len / FRAME_S)))
+  const attackAt = Math.max(1, Math.round(ATTACK_S / len * steps))
+  for (let i = 0; i <= steps; i++) {
+    const t = at + (i / steps) * len
+    let level
+    if (i >= steps) level = 0
+    else if (i <= attackAt) level = VOLUME_STEPS - 1
+    else level = Math.max(1, Math.round(Math.exp(-3.6 * (i - attackAt) / (steps - attackAt)) * (VOLUME_STEPS - 1)))
+    g.gain.setValueAtTime(peak * (level / (VOLUME_STEPS - 1)), t)
+  }
+}
+
+/** 输出链：master → (bit-crush) → destination。返回该连到哪。 */
+function outputChain(ctx, master, bits) {
+  const b = bits === undefined ? gritBits : bits
+  if (!(b > 0)) { master.connect(ctx.destination); return }
+  const key = 'c' + b
+  if (crushCache[key] === undefined || crushCache[key].context !== ctx) {
+    const sh = ctx.createWaveShaper()
+    sh.curve = crushCurve(b)
+    sh.oversample = 'none'
+    crushCache[key] = sh
+  }
+  master.connect(crushCache[key])
+  crushCache[key].connect(ctx.destination)
+}
 
 function schedule(ctx, dest, cand, root, gain, dutyOverride) {
   const t0 = ctx.currentTime
@@ -294,11 +350,7 @@ function schedule(ctx, dest, cand, root, gain, dutyOverride) {
       const f = root * Math.pow(2, semi / 12)
       end = Math.max(end, atMs + lenMs)
       const g = ctx.createGain()
-      g.gain.setValueAtTime(0, at)
-      g.gain.linearRampToValueAtTime(vg, at + ATTACK_S)
-      g.gain.exponentialRampToValueAtTime(
-        Math.max(vg * 0.22, 1e-4), at + Math.min(len, ATTACK_S + DECAY_S))
-      g.gain.exponentialRampToValueAtTime(1e-4, at + len)
+      steppedEnvelope(g, at, len, vg)
       g.connect(dest)
       if (v.kind === 'noise') {
         const src = ctx.createBufferSource()
@@ -339,7 +391,7 @@ function playPlan(cand) {
   const c = audio()
   const master = c.createGain()
   master.gain.value = 0.9
-  master.connect(c.destination)
+  outputChain(c, master)
   schedule(c, master, cand, hz('C5'), 1, null)
   draw(cand, hz('C5'))
 }
@@ -350,12 +402,28 @@ function playChar(charId, rowEl) {
   const c = audio()
   const master = c.createGain()
   master.gain.value = 0.9
-  master.connect(c.destination)
+  outputChain(c, master)
   const dur = schedule(c, master, cand, root, 1, null)
   if (playingRow) playingRow.classList.remove('playing')
   if (rowEl) { rowEl.classList.add('playing'); playingRow = rowEl }
   draw(cand, root, charId)
   return dur
+}
+
+/* 位深选择器 */
+const gritBox = document.getElementById('grit')
+for (const b of [0, 7, 6, 5, 4, 3]) {
+  const btn = document.createElement('button')
+  btn.textContent = b === 0 ? '关掉（干净）' : `${b} bit（${Math.pow(2, b)} 级）`
+  btn.className = b === gritBits ? 'on' : ''
+  btn.onclick = () => {
+    gritBits = b
+    crushCache = {}
+    ;[...gritBox.children].forEach((x) => x.classList.remove('on'))
+    btn.classList.add('on')
+    playChar(char, assignBody.querySelector(`tr[data-char="${char}"]`))
+  }
+  gritBox.appendChild(btn)
 }
 
 /* 角色表 */
@@ -467,18 +535,33 @@ async function draw(cand, root, charId) {
 /* 给自动化校验用 */
 window.__lab = {
   CANDIDATES, ASSIGN, CHARS, GAIN, charRoot, hz, quantize, pulseWave, schedule, SR,
-  async render(id, dutyV, rootHz, sr) {
+  crushCurve, steppedEnvelope, VOLUME_STEPS,
+  get gritBits() { return gritBits },
+  async render(id, dutyV, rootHz, sr, bits, raw) {
     const rate = sr || SR
     const c = BY_ID[id]
     const events = c.voices.flatMap((v) => v.events)
     const dur = (Math.max(...events.map((e) => e[1] + e[2])) + 80) / 1000
     const off = new OfflineAudioContext(1, Math.ceil(rate * dur), rate)
-    const g = off.createGain(); g.gain.value = 1; g.connect(off.destination)
+    const g = off.createGain()
+    // raw=true 绕过 GAIN 表，在增益 1 处测量 —— 位深缩减是非线性的，
+    // 「测得值 ÷ 当前增益」推不出原始值，必须直接量。
+    g.gain.value = raw ? 1 / (GAIN[c.id] ?? 1) : 1
+    const b = bits === undefined ? gritBits : bits
+    if (b > 0) {
+      const sh = off.createWaveShaper(); sh.curve = crushCurve(b); sh.oversample = 'none'
+      g.connect(sh); sh.connect(off.destination)
+    } else {
+      g.connect(off.destination)
+    }
     schedule(off, g, c, rootHz, 1, dutyV === null ? undefined : dutyV)
-    const b = await off.startRendering()
-    return Array.from(b.getChannelData(0))
+    const buf = await off.startRendering()
+    return Array.from(buf.getChannelData(0))
   },
-  /** 只渲染某一个声部，隔离条件下核对音高。 */
+  /**
+   * 只渲染某一个声部，隔离条件下核对音高。
+   * 刻意**不走位深缩减** —— 那个会污染音高检测，隔离测试要的是干净信号。
+   */
   async renderVoice(id, vi, rootHz, sr) {
     const rate = sr || SR
     const c = BY_ID[id]
