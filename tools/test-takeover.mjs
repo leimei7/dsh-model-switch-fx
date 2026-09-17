@@ -73,6 +73,7 @@ const state = async () => {
       var solid = document.querySelector('#dsf-stage .dsf-solid')
       var core = document.querySelector('#dsf-core')
       var coreRect = core ? core.getBoundingClientRect() : null
+      var firstPath = document.querySelector('#dsf-stage .dsf-outline path')
       // 发一个不带修饰键的 keydown，看捕获阶段的拦截是否生效
       var probe = new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true })
       window.dispatchEvent(probe)
@@ -85,6 +86,13 @@ const state = async () => {
         // 最终染色（实心层）必须在画完后亮起来 —— 缺了这条断言，
         // 「内联 opacity:0 盖掉 CSS 的 dsf-drawn 规则」这个回归就漏过去了
         solidOpacity: solid ? Number(getComputedStyle(solid).opacity) : null,
+        // 描边进度：正常模式从 1000px(未绘制) 走到 0px；减少动效模式一开始就是 0px
+        outlineDash: firstPath ? getComputedStyle(firstPath).strokeDashoffset : null,
+        outlineOpacity: firstPath ? Number(getComputedStyle(firstPath).opacity) : null,
+        // 挂在舞台上的 WAAPI 动画数量：减少动效模式应为 0
+        stageAnims: document.querySelector('#dsf-stage svg')
+          ? document.querySelector('#dsf-stage svg').getAnimations().length
+          : 0,
         pointerEvents: root ? getComputedStyle(root).pointerEvents : null,
         keyBlocked: probe.defaultPrevented,
         // 光晕住在 #dsf-stage 里，不能被 clearSvg 误删
@@ -243,6 +251,65 @@ for (const role of [
       : `FAIL 公司名 = ${st.company}`)
   await shot(`08-${role.id}`)
   await atRole(7200)   // 等它收完再切下一个，避免互相接管
+}
+
+console.log('\n[9] prefers-reduced-motion: reduce → 不描边，直接给完成态')
+{
+  // 模拟系统开了「减少动态效果」
+  await send('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+  })
+  await sleep(200)
+
+  const media = await send('Runtime.evaluate', {
+    expression: `window.matchMedia('(prefers-reduced-motion: reduce)').matches`,
+    returnByValue: true,
+  })
+  console.log('  ', media.result.value ? 'ok  媒体查询已生效' : 'FAIL 模拟没生效')
+
+  await click('claude')
+  const t = Date.now()
+  const atR = async (ms) => { const w = ms - (Date.now() - t); if (w > 0) await sleep(w) }
+
+  // 150ms：正常模式下这时描边还停在 1000px（未绘制），减少动效模式应已是 0px
+  await atR(150)
+  let r = await state()
+  console.log('   ', JSON.stringify(r))
+  console.log('  ',
+    r.outlineDash === '0px' && r.outlineOpacity === 1
+      ? 'ok  一开始就是画满的（没有描边过程）'
+      : `FAIL 仍在描边：dash=${r.outlineDash} opacity=${r.outlineOpacity}`)
+  console.log('  ',
+    r.stageAnims === 0
+      ? 'ok  没有布任何 WAAPI 动画'
+      : `FAIL 仍有 ${r.stageAnims} 个动画在跑`)
+  console.log('  ', r.on ? 'ok  浮层可见' : 'FAIL 浮层没出现')
+  console.log('  ',
+    r.haloOpacity !== null && r.haloOpacity > 0.1
+      ? `ok  光晕仍在显示（opacity=${r.haloOpacity}）`
+      : `FAIL 光晕丢了：${r.haloOpacity}`)
+
+  // 保持段：实心染色 + 公司名照样要有（信息不能丢）
+  await atR(4200)
+  r = await state()
+  console.log('   ', JSON.stringify(r))
+  console.log('  ',
+    r.solidOpacity !== null && r.solidOpacity > 0.9
+      ? 'ok  最终染色照样亮起'
+      : `FAIL 没染色：${r.solidOpacity}`)
+  console.log('  ',
+    r.company === 'Anthropic' && r.companyOpacity > 0.9
+      ? 'ok  公司名照样完整可见（信息没丢）'
+      : `FAIL 公司名=${r.company} opacity=${r.companyOpacity}`)
+  await shot('09-reduced-motion')
+
+  // 收尾后要完全恢复
+  await atR(6200)
+  r = await state()
+  console.log('  ', !r.on && !r.keyBlocked ? 'ok  正常收起并解锁' : `FAIL 没收干净：${JSON.stringify(r)}`)
+
+  // 恢复默认媒体设置，别影响后续
+  await send('Emulation.setEmulatedMedia', { features: [] })
 }
 
 ws.close(); child.kill(); process.exit(0)
