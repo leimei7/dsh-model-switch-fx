@@ -37,9 +37,11 @@
   },
   "scripts": {
     "gen": "node tools/gen-logos.mjs",
+    "gen:sfx": "node tools/gen-sfx.mjs",
     "preview": "node tools/preview.mjs",
     "test": "node tools/test-watch.mjs",
-    "test:browser": "node tools/test-takeover.mjs"
+    "test:browser": "node tools/test-takeover.mjs",
+    "test:sfx": "node tools/verify-sfx.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2"

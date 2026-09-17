@@ -55,6 +55,51 @@ await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, dev
 await send('Page.navigate', { url: 'http://127.0.0.1:5199/' })
 await sleep(1200)
 
+// 拦截 Web Audio 的节点创建，用来核对启动音实际排布了多少声部。
+// 必须在第一次播放之前装好（client.js 是惰性建 AudioContext 的）。
+await send('Runtime.evaluate', {
+  expression: `(function () {
+    window.__sfx = { osc: 0, noise: 0, wave: 0, ctx: 0, order: [] }
+    var AC = window.AudioContext || window.webkitAudioContext
+    if (!AC) return
+    var p = AC.prototype
+    var co = p.createOscillator, cb = p.createBufferSource, cw = p.createPeriodicWave
+    p.createOscillator = function () {
+      window.__sfx.osc++; window.__sfx.order.push(['osc', Date.now()])
+      return co.apply(this, arguments)
+    }
+    p.createBufferSource = function () {
+      window.__sfx.noise++; window.__sfx.order.push(['noise', Date.now()])
+      return cb.apply(this, arguments)
+    }
+    p.createPeriodicWave = function () {
+      window.__sfx.wave++
+      return cw.apply(this, arguments)
+    }
+  })()`,
+})
+const resetSfx = () => send('Runtime.evaluate', {
+  expression: `(function(){ window.__sfx.osc=0; window.__sfx.noise=0; window.__sfx.wave=0; window.__sfx.order=[] })()`,
+})
+const readSfx = async () => JSON.parse((await send('Runtime.evaluate', {
+  expression: 'JSON.stringify(window.__sfx)', returnByValue: true,
+})).result.value)
+
+/**
+ * 轮询等到浮层收起。
+ * **不要写死时长** —— 总时长现在是算出来的：语音约束、公司名约束、
+ * 以及「启动音起手 + 长度 + 留白」三者取最大。加了启动音之后减少动效模式
+ * 的总时长会变（220ms 的固定延迟被 510ms 的启动音后推取代），写死必错。
+ */
+const waitIdle = async (maxMs = 14000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < maxMs) {
+    if (!(await state()).on) return true
+    await sleep(200)
+  }
+  return false
+}
+
 const click = (id) => send('Runtime.evaluate', { expression: `document.querySelector('button[data-id="${id}"]').click()` })
 const shot = async (name) => {
   const r = await send('Page.captureScreenshot', { format: 'png' })
@@ -303,13 +348,94 @@ console.log('\n[9] prefers-reduced-motion: reduce → 不描边，直接给完�
       : `FAIL 公司名=${r.company} opacity=${r.companyOpacity}`)
   await shot('09-reduced-motion')
 
-  // 收尾后要完全恢复
-  await atR(6200)
+  // 收尾后要完全恢复（轮询，别写死时长）
+  const done = await waitIdle()
   r = await state()
-  console.log('  ', !r.on && !r.keyBlocked ? 'ok  正常收起并解锁' : `FAIL 没收干净：${JSON.stringify(r)}`)
+  console.log('  ', done && !r.on && !r.keyBlocked ? 'ok  正常收起并解锁' : `FAIL 没收干净：${JSON.stringify(r)}`)
 
   // 恢复默认媒体设置，别影响后续
   await send('Emulation.setEmulatedMedia', { features: [] })
+}
+
+console.log('\n[10] 启动音：按方案排布声部（拦截 Web Audio 节点创建核对）')
+{
+  // 每个角色分到哪个方案、该方案有几个脉冲音 / 几路噪声，用插件的 SFX 数据算出来。
+  // 客户端是 IIFE，内部变量读不到 —— 走它暴露的只读诊断出口 window.__dsfFx。
+  const spec = JSON.parse((await send('Runtime.evaluate', {
+    expression: `(function(){
+      var d = window.__dsfFx
+      if (!d) return 'null'
+      var out = {}
+      for (var cid in d.assign) {
+        var p = d.plans[d.assign[cid]]
+        var pulse = 0, noise = 0
+        for (var i = 0; i < p.voices.length; i++) {
+          if (p.voices[i].kind === 'noise') noise += p.voices[i].events.length
+          else pulse += p.voices[i].events.length
+        }
+        out[cid] = { plan: d.assign[cid], name: p.name, pulse: pulse, noise: noise,
+                     f0: d.f0[cid], root: Math.round(d.root(d.f0[cid])),
+                     ms: d.durationMs(cid) }
+      }
+      return JSON.stringify(out)
+    })()`, returnByValue: true,
+  })).result.value)
+  if (spec === null) {
+    console.log('  ', 'FAIL window.__dsfFx 不存在 —— 客户端没暴露诊断出口')
+  } else {
+  console.log('    角色 → 方案 → 应排布的节点数：')
+  for (const [cid, s] of Object.entries(spec)) {
+    console.log(`      ${cid.padEnd(11)} ${s.name.padEnd(9)} 脉冲×${s.pulse} 噪声×${s.noise}`
+      + `  F0 ${s.f0}Hz → 根音 ${s.root}Hz`)
+  }
+  console.log('  ', Object.keys(spec).length === 11 ? 'ok  11 个角色都有方案与基频' : `FAIL 只有 ${Object.keys(spec).length} 个`)
+
+  // 逐个角色实际播一次，核对节点数
+  let mismatch = []
+  for (const [cid, s] of Object.entries(spec)) {
+    await resetSfx()
+    await click(cid)
+    await sleep(320)          // 启动音在 60ms 起手，最长 380ms
+    const got = await readSfx()
+    if (got.osc !== s.pulse || got.noise !== s.noise) {
+      mismatch.push(`${cid}: 期望 脉冲${s.pulse}/噪声${s.noise}，实际 脉冲${got.osc}/噪声${got.noise}`)
+    }
+    console.log(`      ${cid.padEnd(11)} 实际 脉冲×${got.osc} 噪声×${got.noise}`
+      + (got.osc === s.pulse && got.noise === s.noise ? '  ✓' : '  ✗'))
+    await waitIdle()          // 等它整段收完，避免接管影响下一次统计
+  }
+  console.log('  ', mismatch.length === 0 ? 'ok  11 个角色的声部排布全部正确' : `FAIL ${mismatch.join(' | ')}`)
+
+  // 启动音必须在语音之前响（顺序核对）
+  await resetSfx()
+  await click('grok')
+  await sleep(320)
+  const early = await readSfx()
+  console.log('  ', early.osc > 0 || early.noise > 0
+    ? `ok  启动音在点击后 320ms 内已排布（脉冲×${early.osc} 噪声×${early.noise}）`
+    : 'FAIL 启动音没排布')
+  await waitIdle()
+  }
+}
+
+console.log('\n[11] 启动音开关：sfx=0 时一个节点都不排')
+{
+  await click('claude')
+  await waitIdle()
+  await resetSfx()
+  // 通过 preview 的 trigger 通道把 sfx=0 传进去
+  await send('Runtime.evaluate', {
+    expression: `fetch('/trigger?id=claude&sfx=0')`,
+  })
+  await sleep(400)
+  const off = await readSfx()
+  console.log('   ', off.osc === 0 && off.noise === 0
+    ? 'ok  sfx=0 时没有排布任何音频节点'
+    : `FAIL 仍然排布了 脉冲${off.osc}/噪声${off.noise}`)
+  // 动画本身照常要播（关的只是音效）
+  const st = await state()
+  console.log('   ', st.on ? 'ok  动画不受影响，照常播放' : 'FAIL 动画没播')
+  await waitIdle()
 }
 
 ws.close(); child.kill(); process.exit(0)

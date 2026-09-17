@@ -30,7 +30,7 @@ function check(label, condition, detail) {
 }
 
 /** 造一个够用的假 ctx，把插件挂上去。 */
-function makeCtx() {
+function makeCtx(config) {
   const routes = new Map()
   const handlers = new Map()
   const states = new Map()
@@ -65,7 +65,7 @@ function makeCtx() {
     },
   }
 
-  apply(ctx, {})
+  apply(ctx, config ?? {})
 
   /** 每个 session 的事件序号（真实 DSH 里一个事件一个 seq）。 */
   const seqs = new Map()
@@ -269,6 +269,26 @@ console.log('\n[10] 真实路由 → 角色 对照表（每加一个角色都该
     const got = plays(sse)[0]?.id
     check(`${provider}/${model} → ${want ?? '(不播)'}`, got === want, String(got))
   }
+}
+
+console.log('\n[11] 播放指令必须带上启动音的开关与音量')
+{
+  const { routes, emit } = makeCtx()
+  const sse = openSse(routes.get('/model-switch-fx/events'))
+  emit(session, { lastUsed: null, pending: route('openai', 'gpt-5') })
+  const p = plays(sse)[0]
+  check('默认 sfx = true', p?.sfx === true, JSON.stringify(p?.sfx))
+  check('默认 sfxVolume = 0.5', p?.sfxVolume === 0.5, JSON.stringify(p?.sfxVolume))
+  check('语音音量仍在（0.9）', p?.volume === 0.9, JSON.stringify(p?.volume))
+}
+{
+  // config 能关掉启动音、也能改音量
+  const { routes, emit } = makeCtx({ sfx: false, sfxVolume: 0.25 })
+  const sse = openSse(routes.get('/model-switch-fx/events'))
+  emit(session, { lastUsed: null, pending: route('openai', 'gpt-5') })
+  const p = plays(sse)[0]
+  check('config.sfx=false 传下去了', p?.sfx === false, JSON.stringify(p?.sfx))
+  check('config.sfxVolume=0.25 传下去了', p?.sfxVolume === 0.25, JSON.stringify(p?.sfxVolume))
 }
 
 console.log(`\n结果: ${pass} passed, ${fail} failed\n`)

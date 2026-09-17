@@ -23,9 +23,18 @@ const clients = new Set()
 const frame = (payload) => `data: ${JSON.stringify(payload)}\n\n`
 let seq = 0
 
-function broadcast(id) {
+function broadcast(id, opts = {}) {
   const token = `preview-${++seq}`
-  const payload = frame({ type: 'play', id, token, voice: VOICES[id], volume: 0.9 })
+  const payload = frame({
+    type: 'play',
+    id,
+    token,
+    voice: VOICES[id],
+    volume: opts.volume ?? 0.9,
+    // 启动音开关与音量 —— 和宿主 lib/index.js 的 config 一致
+    sfx: opts.sfx ?? true,
+    sfxVolume: opts.sfxVolume ?? 0.5,
+  })
   for (const res of clients) {
     try {
       res.write(payload)
@@ -33,7 +42,8 @@ function broadcast(id) {
       clients.delete(res)
     }
   }
-  console.log(`→ play ${id} (${VOICES[id]}s) token=${token}`)
+  console.log(`→ play ${id} (${VOICES[id]}s) token=${token}`
+    + `${opts.sfx === 0 || opts.sfx === false ? ' sfx=off' : ''}`)
 }
 
 const PAGE = `<!doctype html>
@@ -102,7 +112,15 @@ const server = createServer((req, res) => {
 
   if (path === '/trigger') {
     const id = url.searchParams.get('id')
-    if (id !== null && Object.prototype.hasOwnProperty.call(VOICES, id)) broadcast(id)
+    if (id !== null && Object.prototype.hasOwnProperty.call(VOICES, id)) {
+      const sfxParam = url.searchParams.get('sfx')
+      const volParam = url.searchParams.get('sfxVolume')
+      broadcast(id, {
+        // sfx=0 用来测「关掉启动音时一个节点都不排」
+        sfx: sfxParam === null ? true : sfxParam !== '0' && sfxParam !== 'false',
+        sfxVolume: volParam === null ? 0.5 : Number(volParam),
+      })
+    }
     res.writeHead(204)
     res.end()
     return
