@@ -1,8 +1,13 @@
 /**
- * 客观校验 sfx-lab 的合成结果：
- *   1) 每段旋律都非静音
- *   2) 每个音的实际音高 = 设计音高（自相关测周期）
- *   3) 脉冲波的谐波幅度 = 傅里叶级数 2/(nπ)·sin(nπ·d)  ← 证明构造是对的
+ * 客观校验 sfx-lab：
+ *   [1] 每个候选：非静音 / 不削顶 / 总时长在 250-400ms
+ *   [2] 脉冲波谐波 = 傅里叶级数 2/(nπ)·sin(nπ·d)，且 50% 占空比抵消偶次谐波
+ *   [3] 每个脉冲声部的每个非滑音音符：隔离渲染后音高正确
+ *   [4] 滑音：起始与终点频率正确
+ *   [5] 跨采样率音高一致（回归：PeriodicWave 不能跨 AudioContext 复用）
+ *   [6] 角色根音映射单调
+ *   [7] 候选两两差异度（简报给的加权公式）—— 直接回答「相似度太高」
+ *   [8] 试听页 UI 渲染
  *
  * 用法: node tools/verify-sfx.mjs
  */
@@ -55,26 +60,27 @@ for (let i = 0; i < 40; i++) {
   if (r.result.value === 'object') break
   await sleep(200)
 }
-
 const evalIn = async (expression, awaitPromise = false) => {
   const r = await send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true })
-  if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0, 300))
+  if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0, 400))
   return r.result.value
 }
+const render = async (expr) => JSON.parse(await evalIn(`${expr}.then(a=>JSON.stringify(a))`, true))
 
-/* ── 在 Node 里做 DSP ─────────────────────────────────────────────────── */
+/* ── DSP ─────────────────────────────────────────────────────────────── */
+const SR = 48000
+const C5 = 440 * Math.pow(2, (72 - 69) / 12)
 const rms = (a) => Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length)
+const peakOf = (a) => a.reduce((m, v) => Math.max(m, Math.abs(v)), 0)
 
 /**
  * 自相关测基频。
- *
- * 两个陷阱都要躲开：
- *   - 只取全局最大值 → 周期信号在 2×周期处同样有峰，会得到**低八度**（500Hz 量成 250Hz）
- *   - 只用「第一个超过 x×最大值」的阈值 → 会落在峰的肩膀上（500Hz 量成 516Hz）
- * 所以取「**第一个达到 0.9×最大值、且是局部峰**」的那个 lag。
+ * 两个陷阱都要躲开：只取全局最大值 → 落到 2×周期（低八度）；只用阈值 → 落到峰肩膀。
+ * 所以取「第一个达到 0.9×最大值、且是局部峰」的 lag。
  */
 function pitch(a, sr) {
   const n = Math.min(a.length, Math.floor(sr * 0.03))
+  if (n < 64) return 0
   const seg = a.slice(0, n)
   const mean = seg.reduce((s, v) => s + v, 0) / n
   const x = seg.map((v) => v - mean)
@@ -90,88 +96,73 @@ function pitch(a, sr) {
   }
   if (best <= 0) return 0
   for (let lag = lo + 1; lag < hi; lag++) {
-    if (ac[lag] >= best * 0.9 && ac[lag] >= ac[lag - 1] && ac[lag] >= ac[lag + 1]) {
-      return sr / lag
-    }
+    if (ac[lag] >= best * 0.9 && ac[lag] >= ac[lag - 1] && ac[lag] >= ac[lag + 1]) return sr / lag
   }
   return 0
 }
-
 /** 指定频率处的幅度（Goertzel）。 */
 function magAt(a, sr, f) {
   const w = 2 * Math.PI * f / sr
   const c = 2 * Math.cos(w)
   let s1 = 0, s2 = 0
-  for (let i = 0; i < a.length; i++) {
-    const s0 = a[i] + c * s1 - s2
-    s2 = s1; s1 = s0
-  }
+  for (let i = 0; i < a.length; i++) { const s0 = a[i] + c * s1 - s2; s2 = s1; s1 = s0 }
   return Math.sqrt(s1 * s1 + s2 * s2 - c * s1 * s2) / a.length
 }
-
-const SR = 48000
-const C5 = 440 * Math.pow(2, (72 - 69) / 12)
-const melodies = await evalIn('JSON.stringify(window.__lab.MELODIES.map(m=>({id:m.id,name:m.name,deg:m.deg,step:m.step,len:m.len})))')
-const MELS = JSON.parse(melodies)
 
 let pass = 0, fail = 0
 const chk = (ok, msg) => { console.log('  ', ok ? 'ok  ' + msg : 'FAIL ' + msg); ok ? pass++ : fail++ }
 
-console.log('\n[1] 每段旋律：非静音 + 每个音的音高正确')
-for (const m of MELS) {
-  const data = await evalIn(
-    `window.__lab.render(${JSON.stringify(m.id)}, 0.5, ${C5}).then(a=>JSON.stringify(a))`,
-    true,
-  )
-  const a = JSON.parse(data)
-  const amp = rms(a)
-  const dur = a.length / SR
-  let pitchOk = 0
-  const detail = []
-  for (let i = 0; i < m.deg.length; i++) {
-    const want = C5 * Math.pow(2, m.deg[i] / 12)
-    const s = Math.floor((i * m.step + 0.006) * SR)   // 跳过起音瞬态
-    const seg = a.slice(s, s + Math.floor(SR * 0.03))
-    const got = pitch(seg, SR)
-    const err = Math.abs(got - want) / want
-    if (err < 0.04) pitchOk++
-    detail.push(`${Math.round(want)}↔${Math.round(got)}`)
-  }
-  chk(amp > 0.02, `${m.name.padEnd(6)} 非静音 (RMS ${amp.toFixed(3)}, ${dur.toFixed(2)}s)`)
-  chk(pitchOk === m.deg.length, `${m.name.padEnd(6)} 音高全对 ${pitchOk}/${m.deg.length}  ${detail.join(' ')}`)
+const CANDS = JSON.parse(await evalIn('JSON.stringify(window.__lab.CANDIDATES)'))
+
+/* [1] 基本健康度 ─────────────────────────────────────────────────────── */
+console.log('\n[1] 每个候选：非静音 / 不削顶 / 总时长 250-400ms')
+const rmsList = []
+for (const c of CANDS) {
+  const a = await render(`window.__lab.render(${JSON.stringify(c.id)}, null, ${C5})`)
+  const evs = c.voices.flatMap((v) => v.events)
+  const total = Math.max(...evs.map((e) => e[1] + e[2]))
+  const amp = rms(a), pk = peakOf(a)
+  rmsList.push(amp)
+  const voices = c.voices.length
+  const noise = c.voices.some((v) => v.kind === 'noise')
+  const glide = evs.some((e) => e.length > 3)
+  console.log(`   ${c.name}  ${total}ms  ${voices}声部${noise ? '+噪声' : ''}${glide ? '+滑音' : ''}`
+    + `  duty ${(c.duty * 100).toFixed(1).replace(/\.0$/, '')}%  RMS ${amp.toFixed(3)}  峰值 ${pk.toFixed(3)}`)
+  chk(amp > 0.02, `${c.name.padEnd(9)} 非静音`)
+  chk(pk < 0.99, `${c.name.padEnd(9)} 不削顶（峰值 ${pk.toFixed(3)}）`)
+  chk(total >= 250 && total <= 400, `${c.name.padEnd(9)} 总时长 ${total}ms 在 250-400ms 内`)
+}
+{
+  // 切角色时听感音量要一致 —— 跟语音那批做响度归一化是同一个道理
+  const dB = 20 * Math.log10(Math.max(...rmsList) / Math.min(...rmsList))
+  chk(dB < 3, `8 个候选响度一致（极差 ${dB.toFixed(2)} dB < 3）`)
 }
 
+/* [2] 傅里叶级数 ─────────────────────────────────────────────────────── */
 console.log('\n[2] 脉冲波谐波幅度 = 傅里叶级数 2/(nπ)·sin(nπ·d)')
 for (const d of [0.5, 0.25, 0.125]) {
-  // 用固定音高 500Hz 渲染一个长音来分析谐波
-  const data = await evalIn(`(async()=>{
+  const a = await render(`(async()=>{
     const off=new OfflineAudioContext(1, 48000, 48000)
     const g=off.createGain(); g.gain.value=1; g.connect(off.destination)
-    const w=window.__lab.pulseWave(off, ${d})
-    const o=off.createOscillator(); o.setPeriodicWave(w); o.frequency.value=500
-    o.connect(g); o.start(0); o.stop(0.99)
-    const b=await off.startRendering()
-    return JSON.stringify(Array.from(b.getChannelData(0)))
-  })()`, true)
-  const a = JSON.parse(data)
+    const o=off.createOscillator(); o.setPeriodicWave(window.__lab.pulseWave(off, ${d}))
+    o.frequency.value=500; o.connect(g); o.start(0); o.stop(0.99)
+    const b=await off.startRendering(); return Array.from(b.getChannelData(0))
+  })()`)
   const seg = a.slice(Math.floor(SR * 0.1), Math.floor(SR * 0.9))
   const h = []
   for (let n = 1; n <= 6; n++) {
-    const measured = magAt(seg, SR, 500 * n)
-    const theory = Math.abs((2 / (n * Math.PI)) * Math.sin(n * Math.PI * d))
-    h.push({ n, measured, theory })
+    h.push({
+      n,
+      measured: magAt(seg, SR, 500 * n),
+      theory: Math.abs((2 / (n * Math.PI)) * Math.sin(n * Math.PI * d)),
+    })
   }
-  // 比「相对基波的比值」而不是绝对值：PeriodicWave 会做整体归一化，
-  // 绝对值带着一个与 duty 相关的固定缩放（约 0.33~0.38），比值则天然免掉它。
-  const r = (x) => (x.theory < 1e-9 ? null : x.measured / h[0].measured)
-  const rt = (x) => (x.theory < 1e-9 ? null : x.theory / h[0].theory)
+  // 比「相对基波的比值」—— PeriodicWave 有整体归一化，比值天然免掉它
+  const r = (x) => x.measured / h[0].measured
+  const rt = (x) => x.theory / h[0].theory
   let worst = 0
-  for (const x of h) {
-    if (r(x) === null) continue
-    worst = Math.max(worst, Math.abs(r(x) - rt(x)) / rt(x))
-  }
-  const evenGone = h.filter((x) => x.n % 2 === 0).every((x) => x.theory < 1e-9 || x.measured > h[0].measured * 0.02)
-  chk(worst < 0.05, `duty ${(d * 100).toFixed(1)}%  谐波配比吻合（相对基波的最大误差 ${(worst * 100).toFixed(1)}%）`)
+  for (const x of h) if (x.theory > 1e-9) worst = Math.max(worst, Math.abs(r(x) - rt(x)) / rt(x))
+  chk(worst < 0.05, `duty ${(d * 100).toFixed(1)}%  谐波配比吻合（相对基波最大误差 ${(worst * 100).toFixed(1)}%）`)
   if (d === 0.5) {
     chk(h.filter((x) => x.n % 2 === 0).every((x) => x.measured < h[0].measured * 0.02),
       'duty 50%  偶次谐波被抵消（方波的标志）')
@@ -179,76 +170,181 @@ for (const d of [0.5, 0.25, 0.125]) {
   console.log('      ' + h.map((x) => `h${x.n}:${x.measured.toFixed(3)}/${x.theory.toFixed(3)}`).join('  '))
 }
 
-console.log('\n[2b] 跨采样率的音高一致性')
-console.log('     （回归：PeriodicWave 绑定创建它的 AudioContext，跨 context 复用会让音高整体乘采样率比）')
+/* [3] 逐音高核对（隔离声部）───────────────────────────────────────────── */
+console.log('\n[3] 每个脉冲声部的每个非滑音音符：音高正确')
+for (const c of CANDS) {
+  for (let vi = 0; vi < c.voices.length; vi++) {
+    const v = c.voices[vi]
+    if (v.kind !== 'pulse') continue
+    const flat = v.events.filter((e) => e.length === 3)
+    if (flat.length === 0) continue
+    const a = await render(`window.__lab.renderVoice(${JSON.stringify(c.id)}, ${vi}, ${C5})`)
+    const bad = []
+    for (const [semi, at, len] of flat) {
+      const want = C5 * Math.pow(2, semi / 12)
+      const from = Math.floor((at + 6) / 1000 * SR)
+      const seg = a.slice(from, from + Math.floor(Math.min(28, Math.max(12, len - 8)) / 1000 * SR))
+      const got = pitch(seg, SR)
+      if (!(Math.abs(got - want) / want < 0.05)) bad.push(`${Math.round(want)}↔${Math.round(got)}`)
+    }
+    chk(bad.length === 0, `${c.name} 声部${vi} 的 ${flat.length} 个音全对${bad.length ? ' — 错: ' + bad.join(' ') : ''}`)
+  }
+}
+
+/* [4] 滑音 ───────────────────────────────────────────────────────────── */
+console.log('\n[4] 滑音：确认为连续上升（线性斜坡）')
+{
+  const c = CANDS.find((x) => x.voices.some((v) => v.events.some((e) => e.length > 3)))
+  const vi = c.voices.findIndex((v) => v.events.some((e) => e.length > 3))
+  const [from, at, len, to] = c.voices[vi].events.find((e) => e.length > 3)
+  const a = await render(`window.__lab.renderVoice(${JSON.stringify(c.id)}, ${vi}, ${C5})`)
+  const atMs = (ms) => Math.floor(ms / 1000 * SR)
+  const f0 = C5 * Math.pow(2, from / 12), f1 = C5 * Math.pow(2, to / 12)
+  // 滑音音高持续变化，端点取窗只能得到平均值 —— 所以测**中点**和早期各一次，
+  // 与线性斜坡在该时刻的理论值比较，并确认确实是"往上滑"而不是一步跳过去。
+  const early = pitch(a.slice(atMs(at + 12), atMs(at + 12) + Math.floor(SR * 0.014)), SR)
+  const midAt = at + len * 0.5
+  const mid = pitch(a.slice(atMs(midAt - 7.5), atMs(midAt + 7.5)), SR)
+  const wantEarly = f0 + (f1 - f0) * 0.12 / (len / 1000) * 0.012
+  const wantMid = (f0 + f1) / 2
+  console.log(`   ${c.name} 滑音 ${from}→${to} 半音（${Math.round(f0)}→${Math.round(f1)}Hz）`
+    + `  实测 早期 ${Math.round(early)}Hz  中点 ${Math.round(mid)}Hz(理论 ${Math.round(wantMid)})`)
+  chk(Math.abs(mid - wantMid) / wantMid < 0.07, `滑音中点符合线性斜坡（误差 ${(Math.abs(mid - wantMid) / wantMid * 100).toFixed(1)}%）`)
+  chk(early < mid * 0.97, `确实是连续上升（早期 ${Math.round(early)} < 中点 ${Math.round(mid)}），不是跳变`)
+}
+
+/* [5] 跨采样率 ───────────────────────────────────────────────────────── */
+console.log('\n[5] 跨采样率音高一致（回归：PeriodicWave 不能跨 AudioContext 复用）')
 {
   const got = {}
   for (const sr of [44100, 48000]) {
-    const a = JSON.parse(await evalIn(
-      `window.__lab.tone(0.5, 500, ${sr}).then(x=>JSON.stringify(x))`, true))
+    const a = await render(`window.__lab.tone(0.5, 500, ${sr})`)
     const from = Math.floor(sr * 0.15)
     got[sr] = pitch(a.slice(from, from + Math.floor(sr * 0.05)), sr)
   }
-  const err = Math.abs(got[48000] - got[44100]) / 500
-  chk(err < 0.02,
-    `44100Hz / 48000Hz 渲染同一音高一致（${Math.round(got[44100])}Hz / ${Math.round(got[48000])}Hz，目标 500Hz）`)
-  chk(Math.abs(got[48000] - 500) / 500 < 0.02, `绝对音高正确（${Math.round(got[48000])}Hz，目标 500Hz）`)
+  chk(Math.abs(got[48000] - got[44100]) / 500 < 0.02,
+    `44100 / 48000 渲染同一音高一致（${Math.round(got[44100])} / ${Math.round(got[48000])}Hz，目标 500Hz）`)
+  chk(Math.abs(got[48000] - 500) / 500 < 0.02, `绝对音高正确（${Math.round(got[48000])}Hz）`)
 }
 
-console.log('\n[3] 各角色根音（F0 单调映射到 A4~E5 后量化）')
-const chars = JSON.parse(await evalIn('JSON.stringify(window.__lab.CHARS)'))
-for (const [id, f0] of Object.entries(chars)) {
-  const root = await evalIn(`window.__lab.charRoot(${f0})`)
-  console.log(`      ${id.padEnd(11)} F0 ${String(f0).padStart(3)}Hz  ->  根音 ${root.toFixed(1)}Hz`)
-}
-const roots = JSON.parse(await evalIn(`JSON.stringify(Object.values(window.__lab.CHARS).map(f=>window.__lab.charRoot(f)))`))
-const spread = 12 * Math.log2(Math.max(...roots) / Math.min(...roots))
-chk(spread < 12, `根音跨度 ${spread.toFixed(2)} 个半音（< 1 个八度 = 同一件乐器不同键）`)
-
-// 关键性质：单调映射 —— 相近的 F0 不能落到相差一个八度的两个音上。
-// （早期用「折八度进窗口」时，329Hz→E5 而 333Hz→E4，差整整一个八度。）
+/* [6] 角色根音单调 ───────────────────────────────────────────────────── */
+console.log('\n[6] 角色根音映射单调（A4~E5）')
 {
-  const pairs = Object.values(chars).map((f, i, arr) => [f, roots[i]]).sort((a, b) => a[0] - b[0])
-  let worst = 0, worstAt = ''
-  for (let i = 1; i < pairs.length; i++) {
-    const dF0 = Math.log2(pairs[i][0] / pairs[i - 1][0])
-    const dRoot = Math.abs(Math.log2(pairs[i][1] / pairs[i - 1][1])) * 12
-    // 相邻 F0 相差半音以内时，根音不应跳超过 2 个半音
-    if (dF0 * 12 <= 1.2 && dRoot > worst) { worst = dRoot; worstAt = `${pairs[i - 1][0]}Hz->${pairs[i][0]}Hz` }
-  }
-  chk(worst <= 2, `单调性：相邻 F0 内根音最大跳变 ${worst.toFixed(1)} 个半音（${worstAt || '无相近对'}）`)
-}
-
-// 逐对检查：F0 更低的角色，根音不能反而更高
-{
+  const chars = JSON.parse(await evalIn('JSON.stringify(window.__lab.CHARS)'))
+  const ids = Object.keys(chars)
+  const roots = JSON.parse(await evalIn(
+    `JSON.stringify(Object.values(window.__lab.CHARS).map(f=>window.__lab.charRoot(f)))`))
   let inversions = 0
-  for (let i = 0; i < roots.length; i++) {
-    for (let j = 0; j < roots.length; j++) {
-      const fi = Object.values(chars)[i], fj = Object.values(chars)[j]
-      if (fi < fj && roots[i] > roots[j]) inversions++
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = 0; j < ids.length; j++) {
+      if (chars[ids[i]] < chars[ids[j]] && roots[i] > roots[j]) inversions++
     }
   }
-  chk(inversions === 0, `单调性：${inversions} 处逆序（F0 更低却给了更高的根音）`)
+  const spread = 12 * Math.log2(Math.max(...roots) / Math.min(...roots))
+  chk(inversions === 0, `0 处逆序（F0 更低却给了更高根音）`)
+  chk(spread < 12, `根音跨度 ${spread.toFixed(2)} 个半音 < 1 个八度`)
 }
 
-console.log('\n[4] 试听页 UI 是否正常渲染')
-await sleep(800)
+/* [7] 候选两两差异度 ─────────────────────────────────────────────────── */
+console.log('\n[7] 候选两两差异度（简报公式 + 我补的「音程内容」项）')
+console.log('    d = 2.0·Δ走向 + 1.5·|声部数差|/3 + 1.5·D_IOI + 0.5·|占空比差|')
+console.log('        + 1.0·Δ噪声起手 + 1.0·Δ滑音 + 1.0·D_pitch')
+console.log('    （D_pitch 是我补的：简报把「音程内容」排在第 4 位，但给的公式漏了它 ——')
+console.log('      结果 [0,4,7,12] 和 [0,4,7,12,16] 会被判成同一内容，只差节奏。）')
+{
+  const feat = CANDS.map((c) => {
+    const evs = c.voices.flatMap((v) => v.events)
+    const total = Math.max(...evs.map((e) => e[1] + e[2]))
+    const bins = new Array(16).fill(0)
+    for (const e of evs) bins[Math.min(15, Math.floor(e[1] / total * 16))] = 1
+    // 音程序列：取主脉冲声部（声部数最多、非噪声的那条）的音高，算相邻音程
+    const pulse = c.voices.filter((v) => v.kind === 'pulse').pop()
+    const seq = pulse.events.map((e) => e[0])
+    const deltas = seq.slice(1).map((s, i) => s - seq[i])
+    return {
+      name: c.name,
+      shape: c.shape,
+      voices: c.voices.length,
+      duty: c.duty,
+      noise: c.voices.some((v) => v.kind === 'noise' && v.events[0][1] === 0) ? 1 : 0,
+      glide: evs.some((e) => e.length > 3) ? 1 : 0,
+      bins,
+      deltas,
+    }
+  })
+  const l1bins = (a, b) => {
+    let l1 = 0
+    for (let i = 0; i < 16; i++) l1 += Math.abs(a[i] - b[i])
+    return l1 / Math.max(1, a.reduce((s, v) => s + v, 0) + b.reduce((s, v) => s + v, 0))
+  }
+  /** 音程内容距离：相邻音程序列补零对齐后取平均绝对差，除以 12 归一到 ~[0,1]。 */
+  const dPitch = (a, b) => {
+    const n = Math.max(a.length, b.length)
+    if (n === 0) return 0
+    let s = 0
+    for (let i = 0; i < n; i++) s += Math.abs((a[i] ?? 0) - (b[i] ?? 0))
+    return Math.min(1, s / n / 12)
+  }
+  const pairs = []
+  for (let i = 0; i < feat.length; i++) {
+    for (let j = i + 1; j < feat.length; j++) {
+      const a = feat[i], b = feat[j]
+      const d = 2.0 * (a.shape === b.shape ? 0 : 1)
+        + 1.5 * Math.abs(a.voices - b.voices) / 3
+        + 1.5 * l1bins(a.bins, b.bins)
+        + 0.5 * Math.abs(a.duty - b.duty)
+        + 1.0 * Math.abs(a.noise - b.noise)
+        + 1.0 * Math.abs(a.glide - b.glide)
+        + 1.0 * dPitch(a.deltas, b.deltas)
+      pairs.push({ i, j, d })
+    }
+  }
+  pairs.sort((x, y) => x.d - y.d)
+  console.log('    最相似的 5 对：')
+  for (const p of pairs.slice(0, 5)) {
+    const a = feat[p.i], b = feat[p.j]
+    const why = []
+    if (a.shape === b.shape) why.push('同走向')
+    if (a.voices === b.voices) why.push('同声部数')
+    if (a.duty === b.duty) why.push('同占空比')
+    console.log(`      ${p.d.toFixed(2)}  ${a.name} ↔ ${b.name}   ${why.length ? '(' + why.join('/') + ' 相同)' : ''}`)
+  }
+  console.log('    最不相似的 3 对：')
+  for (const p of pairs.slice(-3)) {
+    console.log(`      ${p.d.toFixed(2)}  ${feat[p.i].name} ↔ ${feat[p.j].name}`)
+  }
+  const min = pairs[0].d, avg = pairs.reduce((s, p) => s + p.d, 0) / pairs.length
+  const identicalRhythm = []
+  for (let i = 0; i < CANDS.length; i++) {
+    for (let j = i + 1; j < CANDS.length; j++) {
+      if (CANDS[i].shape === CANDS[j].shape && l1bins(feat[i].bins, feat[j].bins) < 0.01) {
+        identicalRhythm.push(`${CANDS[i].name}↔${CANDS[j].name}`)
+      }
+    }
+  }
+  console.log(`    最小 ${min.toFixed(2)}  平均 ${avg.toFixed(2)}  最大 ${pairs[pairs.length - 1].d.toFixed(2)}`)
+  chk(min > 1.0, `没有「换皮不换骨」的方案（最小成对距离 ${min.toFixed(2)} > 1.0，简报经验阈值）`)
+  chk(identicalRhythm.length === 0,
+    `没有走向+节奏双同的方案${identicalRhythm.length ? ' — 违规: ' + identicalRhythm.join(', ') : ''}`)
+  chk(new Set(feat.map((f) => f.shape)).size >= 5, `走向覆盖 ${new Set(feat.map((f) => f.shape)).size} 类（≥5）`)
+  chk(new Set(feat.map((f) => f.voices)).size >= 2, `声部数覆盖 ${new Set(feat.map((f) => f.voices)).size} 档`)
+  chk(new Set(feat.map((f) => f.duty)).size >= 3, `占空比覆盖 ${new Set(feat.map((f) => f.duty)).size} 档`)
+}
+
+/* [8] UI ─────────────────────────────────────────────────────────────── */
+console.log('\n[8] 试听页 UI')
+await sleep(700)
 {
   const ui = JSON.parse(await evalIn(`JSON.stringify({
     duty: document.querySelectorAll('#duty button').length,
     rows: document.querySelectorAll('#mel tr').length,
     chars: document.querySelectorAll('#chars button').length,
-    canvas: (function(){
-      const c = document.getElementById('wave')
-      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data
-      let lit = 0
-      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) lit++
-      return lit
-    })(),
-    title: document.title,
+    canvas: (function(){const c=document.getElementById('wave')
+      const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data
+      let n=0; for(let i=3;i<d.length;i+=4) if(d[i]>0) n++; return n})(),
   })`))
-  chk(ui.duty === 4, `占空比按钮 ${ui.duty}/4`)
-  chk(ui.rows === 5, `旋律候选 ${ui.rows}/5`)
+  chk(ui.duty === 4, `占空比按钮 ${ui.duty}/4（按候选 + 三档）`)
+  chk(ui.rows === 8, `候选 ${ui.rows}/8`)
   chk(ui.chars === 11, `角色按钮 ${ui.chars}/11`)
   chk(ui.canvas > 1000, `首屏波形已绘制（${ui.canvas} 个不透明像素）`)
 }

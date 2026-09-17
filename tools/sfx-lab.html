@@ -10,7 +10,7 @@
   h1{font-size:17px;letter-spacing:.14em;color:#8ff;margin-bottom:6px}
   h2{font-size:12px;letter-spacing:.16em;color:#5a6480;margin:26px 0 10px;
     text-transform:uppercase;font-weight:600}
-  p.note{color:#67718c;max-width:78ch;margin-bottom:18px}
+  p.note{color:#67718c;max-width:86ch;margin-bottom:18px}
   code{background:#111726;padding:1px 5px;border-radius:3px;color:#9fd}
   .row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
   button{font:12px/1 inherit;letter-spacing:.06em;cursor:pointer;
@@ -18,52 +18,60 @@
     padding:8px 12px;transition:.12s}
   button:hover{border-color:#3d4a68;color:#e6ecf7}
   button.on{background:#13233a;border-color:#3f8fd0;color:#bfe4ff}
-  table{border-collapse:collapse;width:100%;max-width:900px}
+  table{border-collapse:collapse;width:100%;max-width:1000px}
   th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #141b29;vertical-align:middle}
   th{color:#5a6480;font-size:11px;letter-spacing:.1em;font-weight:600}
   td.name{color:#dfe7f5;white-space:nowrap}
   td.desc{color:#67718c}
-  canvas{width:100%;max-width:900px;height:110px;background:#0a0e18;
+  td.tag{color:#7f8ba6;white-space:nowrap;font-size:11px}
+  canvas{width:100%;max-width:1000px;height:120px;background:#0a0e18;
     border:1px solid #1a2233;border-radius:6px;display:block;margin-top:10px}
   .key{color:#8ff}
-  .meta{color:#4d566d;font-size:11px;margin-top:8px}
+  .meta{color:#4d566d;font-size:11px;margin-top:8px;line-height:1.9}
 </style>
 </head>
 <body>
 <h1>SFX LAB · 8-bit 启动音</h1>
 <p class="note">
-  全部用 Web Audio 实时合成，<b>零音频文件</b>。脉冲波由傅里叶级数构造：
-  <code>aₙ = 2/(nπ)·sin(nπ·d)</code>，<code>d</code> 是占空比 —— 这就是 NES 2A03 那四档音色。
-  角色那一栏的音高来自各段语音实测的基频 F0（映射进 E4~E5 窗口后量化到半音），
-  所以每个角色的启动音和它自己的声线同调。
+  全部 Web Audio 实时合成，<b>零音频文件</b>。脉冲波由傅里叶级数构造：
+  <code>aₙ = 2/(nπ)·sin(nπ·d)</code>，<code>d</code> 是占空比 —— 这就是 2A03 的音色。
+  低音用三角波（增益 1.4×，因为三角谐波少、感知响度弱），另有噪声通道做「起手嗞」。
+  角色那一栏的音高来自各段语音实测的基频 F0，单调映射进 A4~E5 后量化到半音。
+</p>
+<p class="note">
+  8 个候选刻意在 <b>走向 / 声部数 / 节奏型 / 占空比 / 噪声 / 滑音</b> 六个维度上拉开，
+  每个只共享其中一两个。表格里的「差异点」写的是它和其他 7 个最不一样的地方。
 </p>
 
-<h2>占空比（音色）</h2>
+<h2>占空比覆盖</h2>
 <div class="row" id="duty"></div>
+<p class="note" style="margin:6px 0 0;font-size:11px">
+  注意：<b>75% 与 25% 听感完全相同</b>（反相，人耳对相位不敏感），所以只保留三档。
+</p>
 
-<h2>旋律候选</h2>
-<table><tbody id="mel"></tbody></table>
+<h2>8 个候选</h2>
+<table>
+  <thead><tr><th>方案</th><th>结构</th><th>差异点</th><th></th></tr></thead>
+  <tbody id="mel"></tbody>
+</table>
 
 <h2>调到各角色的调性上</h2>
-<p class="note" style="margin-bottom:10px">先在上面选一个旋律，再点角色 —— 听同一段琶音在不同调上的效果。</p>
+<p class="note" style="margin-bottom:10px">先在上面选一个方案，再点角色 —— 听同一段启动音在不同调上的效果。</p>
 <div class="row" id="chars"></div>
 
-<h2>波形（离线渲染，用来核对包络）</h2>
-<canvas id="wave" width="1800" height="220"></canvas>
+<h2>波形（离线渲染的包络，顺带核对结构）</h2>
+<canvas id="wave" width="2000" height="240"></canvas>
 <div class="meta" id="meta">—</div>
 
 <script>
 'use strict'
 
-/* ── 脉冲波：直接按傅里叶级数构造 ───────────────────────────────────────── */
+/* ── 脉冲波：按傅里叶级数构造 ──────────────────────────────────────────── */
 const HARMONICS = 48
-/** 统一采样率，别让离线渲染和分析对不上。 */
 const SR = 48000
 /**
- * PeriodicWave 是**绑定到创建它的 AudioContext** 的。
- * 跨 context 复用会得到错误的音高 —— 实测：在 44100Hz 的 context 里建的波，
- * 拿到 48000Hz 的 context 里播，音高会整体乘 48000/44100 ≈ 1.088（高约 1.5 个半音）。
- * 所以按 context 分开缓存（WeakMap，context 释放后缓存自动回收）。
+ * PeriodicWave 绑定创建它的 AudioContext，跨 context 复用会让音高整体
+ * 乘采样率比（44100 建的拿到 48000 播 → ×1.088）。所以按 context 分开缓存。
  */
 const waveCache = new WeakMap()
 function pulseWave(ctx, duty) {
@@ -80,40 +88,152 @@ function pulseWave(ctx, duty) {
   return w
 }
 
-/* ── 音名 → 频率（十二平均律，A4 = 440）─────────────────────────────────── */
+/** 噪声通道（2A03 的 15-bit LFSR）。用固定种子，保证离线校验可复现。 */
+function noiseBuffer(ctx) {
+  const n = Math.floor(ctx.sampleRate * 0.2)
+  const b = ctx.createBuffer(1, n, ctx.sampleRate)
+  const d = b.getChannelData(0)
+  let s = 0x2f6e2b1
+  for (let i = 0; i < n; i++) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    d[i] = ((s / 0x3fffffff) - 1) * Math.pow(1 - i / n, 2)
+  }
+  return b
+}
+
+/* ── 音名 / 音高工具 ───────────────────────────────────────────────────── */
 const SEMI = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }
 function hz(name) {
   const m = /^([A-G])(#?)(\d)$/.exec(name)
   const n = SEMI[m[1]] + (m[2] === '#' ? 1 : 0) + (Number(m[3]) + 1) * 12
   return 440 * Math.pow(2, (n - 69) / 12)
 }
-/** 把频率量化到最近的半音，免得出现不在调上的微分音。 */
 function quantize(f) { return 440 * Math.pow(2, Math.round(12 * Math.log2(f / 440)) / 12) }
 
-/* ── 旋律候选：degree 是相对根音的半音数 ───────────────────────────────── */
-const MELODIES = [
-  { id: 'up4',   name: '上行四音',  desc: '0-4-7-12 大三和弦琶音上行，最经典的「系统就绪」手势', deg: [0, 4, 7, 12], step: 0.055, len: 0.11 },
-  { id: 'ding',  name: '两音叮咚',  desc: '0-12 只有两个音，最短最干脆（约 180ms）',           deg: [0, 12],       step: 0.09,  len: 0.14 },
-  { id: 'up3',   name: '三音上行',  desc: '0-7-12 空五度，比大三度更「仪器」一点',              deg: [0, 7, 12],    step: 0.07,  len: 0.13 },
-  { id: 'five',  name: '五音快速',  desc: '0-4-7-12-16 更花哨，接近 1-UP 那种连琶',            deg: [0, 4, 7, 12, 16], step: 0.042, len: 0.09 },
-  { id: 'down',  name: '下滑收束',  desc: '12-7-4-0 下行，更像「待机 / 关机」而不是开机',       deg: [12, 7, 4, 0], step: 0.055, len: 0.11 },
+/* ── 8 个候选 ───────────────────────────────────────────────────────────
+   events: [半音偏移, 起始ms, 时长ms]；有第 4 个元素则是滑音终点（portamento）
+   shape: 走向分类，差异度指标要用
+   ──────────────────────────────────────────────────────────────────────── */
+const CANDIDATES = [
+  {
+    id: 'ready', name: '① 就绪琶音',
+    shape: 'ascending',
+    struct: '单声部 · 5 音均匀上行 · duty 25%',
+    diff: '参照系：唯一 5 音、均匀节奏、纯上行',
+    duty: 0.25,
+    voices: [{ kind: 'pulse', events: [[0, 0, 55], [4, 60, 55], [7, 120, 55], [12, 180, 110], [16, 300, 60]] }],
+  },
+  {
+    id: 'disk', name: '② 磁盘机',
+    shape: 'descending',
+    struct: '脉冲+噪声 · 2 音下行 · duty 12.5%',
+    diff: '唯一下行 + 唯一噪声起手 + 最少音（2+噪声）',
+    duty: 0.125,
+    voices: [
+      { kind: 'noise', events: [[0, 0, 35]] },
+      { kind: 'pulse', events: [[7, 40, 90], [0, 150, 160]] },
+    ],
+  },
+  {
+    id: 'ensemble', name: '③ 大合奏',
+    shape: 'ascending',
+    struct: '三声部齐奏 · 上行 · duty 50%',
+    diff: '唯一三声部（脉冲1 + 平行低三度脉冲2 + 三角低音），最厚',
+    duty: 0.5,
+    voices: [
+      { kind: 'triangle', events: [[-12, 0, 200]] },
+      { kind: 'pulse', events: [[0, 0, 60], [4, 70, 60], [7, 140, 120]] },
+      { kind: 'pulse', events: [[-3, 0, 60], [1, 70, 60], [4, 140, 120]] },
+    ],
+  },
+  {
+    id: 'call', name: '④ 召唤-回应',
+    shape: 'callResponse',
+    struct: '低音先行 · 三角起手再进脉冲 · duty 25%',
+    diff: '唯一低音先出（设备醒来→应答），而非直接宣言',
+    duty: 0.25,
+    voices: [
+      { kind: 'triangle', events: [[-12, 0, 70]] },
+      { kind: 'pulse', events: [[0, 90, 50], [7, 150, 50], [12, 210, 120]] },
+    ],
+  },
+  {
+    id: 'arch', name: '⑤ 拱形钟琴',
+    shape: 'arch',
+    struct: '单声部 · 上-顶-下 · duty 12.5%',
+    diff: '唯一拱形走向，且最高音在中间而非结尾',
+    duty: 0.125,
+    voices: [{ kind: 'pulse', events: [[0, 0, 60], [7, 70, 60], [12, 140, 50], [7, 200, 50], [4, 260, 70]] }],
+  },
+  {
+    // 原来这里是「附点宣告」([0,4,7,12] + 前长后密)，但差异度指标测出它和 ①
+    // 在 6 个维度里共享 5 个（同走向/声部数/占空比/无噪声/无滑音），音程内容也几乎相同
+    // —— 确实是换皮。改成「琶音和弦」织体：这是简报 C-3 提到的 NES 惯用法
+    // （单声道发不出和弦，就在一两帧内快速扫过和弦音），8 个方案里只有这里用到。
+    id: 'stab', name: '⑥ 和弦击',
+    shape: 'chordStab',
+    struct: '单声部 · 两个 25ms 琶音和弦 I→V · duty 12.5%',
+    diff: '唯一「琶音和弦」织体：密集音簇而非旋律线，且走向分类独一无二',
+    duty: 0.125,
+    voices: [{
+      kind: 'pulse',
+      events: [[0, 0, 22], [4, 22, 22], [7, 44, 70], [7, 140, 22], [11, 162, 22], [14, 184, 100]],
+    }],
+  },
+  {
+    id: 'horn', name: '⑦ 顿号号角',
+    shape: 'flatLeap',
+    struct: '单声部+尾段三角 · 同音三击后跳进 · duty 25%',
+    diff: '唯一同音反复后跳进：前 135ms 是顿号，然后一把跳上去',
+    duty: 0.25,
+    voices: [
+      { kind: 'pulse', events: [[0, 0, 45], [0, 55, 45], [0, 110, 45], [7, 165, 55], [12, 230, 120]] },
+      { kind: 'triangle', events: [[-5, 165, 185]] },
+    ],
+  },
+  {
+    id: 'glide', name: '⑧ 滑音八度',
+    shape: 'glide',
+    struct: '双脉冲 · 连续滑音 + 两个八度终结 · duty 50%',
+    diff: '唯一连续滑音（非阶梯音高）+ 唯一跳双八度终结',
+    duty: 0.5,
+    voices: [
+      { kind: 'pulse', events: [[0, 0, 130, 7], [19, 200, 150]] },
+      { kind: 'pulse', events: [[19, 200, 150]] },
+    ],
+  },
 ]
+
+/**
+ * 每个候选的归一化增益（**实测反推**，不是拍的）。
+ *
+ * 多声部直接相加会削顶：③ 三声部原始峰值 2.047、⑦ 1.525、⑧ 1.428、④ 1.335。
+ * 取 gain = min(目标RMS/实测RMS, 0.90/实测峰值)，目标 RMS 0.115 ——
+ * 于是 8 个候选的响度落在 1.6dB 内，且峰值最大 0.90 不削顶。
+ * **改动候选后必须重新测量**（tools/verify-sfx.mjs 会报 RMS 与峰值）。
+ */
+const GAIN = {
+  ready: 0.885,
+  disk: 0.992,
+  ensemble: 0.406,
+  call: 0.535,
+  arch: 1.000,
+  stab: 1.045,
+  horn: 0.498,
+  glide: 0.630,
+}
 
 /* 角色 F0：来自 assets/*.mp3 的实测（自相关音高跟踪） */
 const CHARS = {
   claude: 155, kimi: 222, qwen: 222, minimax: 241, glm: 242, musespark: 255,
   chatgpt: 279, grok: 329, deepseek: 333, mimo: 369, gemini: 429,
 }
-/* F0 的实测范围 */
 const F0_MIN = 155, F0_MAX = 429
-/* 目标窗口：A4 ~ E5（纯五度），跨度 7 个半音 */
 const ROOT_LO = 440, ROOT_HI = 659.25
 /**
- * 把 F0 **单调**映射进目标窗口再量化到半音。
- *
- * 不能用「折八度进窗口」的写法：那会让 329Hz 折成 E5、333Hz 留成 E4
- * —— 两个只差 4Hz 的声线落到相差一个八度的两个音上，听感极突兀。
- * 改成在音高（对数）空间线性插值，保证相近的 F0 一定得到相近的根音。
+ * 把 F0 **单调**映射进目标窗口（A4~E5）再量化到半音。
+ * 不能「折八度进窗口」：那会让 329Hz 折成 E5、333Hz 留成 E4，
+ * 两个只差 4Hz 的声线落到相差一个八度的两个音上。
  */
 function charRoot(f0) {
   const t = (Math.log2(f0) - Math.log2(F0_MIN)) / (Math.log2(F0_MAX) - Math.log2(F0_MIN))
@@ -121,31 +241,69 @@ function charRoot(f0) {
   return quantize(f)
 }
 
-/* ── 排布一段旋律（可离线也可实时）─────────────────────────────────────── */
-function schedule(ctx, dest, mel, root, duty, gain) {
+/* ── 合成 ───────────────────────────────────────────────────────────────
+   包络按 2A03 的惯用法：起音 0~2 帧（瞬时）+ 衰减 2~6 帧 @60Hz，
+   末端由「长度计数器」硬截断，不是长长的指数尾巴。
+   三角波增益 1.4×（谐波少、感知响度弱）；噪声 0.5×。
+   ──────────────────────────────────────────────────────────────────────── */
+const VOICE_GAIN = { pulse: 1.0, triangle: 1.4, noise: 0.5 }
+const ATTACK_S = 0.003
+const DECAY_S = 0.075
+
+function schedule(ctx, dest, cand, root, gain, dutyOverride) {
   const t0 = ctx.currentTime
+  const duty = dutyOverride ?? cand.duty
   const wave = pulseWave(ctx, duty)
-  mel.deg.forEach((semi, i) => {
-    const f = root * Math.pow(2, semi / 12)
-    const at = t0 + i * mel.step
-    const osc = ctx.createOscillator()
-    osc.setPeriodicWave(wave)
-    osc.frequency.value = f
-    const g = ctx.createGain()
-    // NES 的包络是极快起音 + 快速衰减，没有持续段
-    g.gain.setValueAtTime(0, at)
-    g.gain.linearRampToValueAtTime(gain, at + 0.004)
-    g.gain.exponentialRampToValueAtTime(0.0008, at + mel.len)
-    osc.connect(g).connect(dest)
-    osc.start(at)
-    osc.stop(at + mel.len + 0.02)
-  })
-  return t0 + (mel.deg.length - 1) * mel.step + mel.len
+  const norm = (GAIN[cand.id] ?? 1) * gain
+  let end = 0
+
+  for (const v of cand.voices) {
+    const vg = (VOICE_GAIN[v.kind] ?? 1) * norm
+    for (const ev of v.events) {
+      const [semi, atMs, lenMs, glideTo] = ev
+      const at = t0 + atMs / 1000
+      const len = lenMs / 1000
+      const f = root * Math.pow(2, semi / 12)
+      end = Math.max(end, atMs + lenMs)
+
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0, at)
+      g.gain.linearRampToValueAtTime(vg, at + ATTACK_S)
+      g.gain.exponentialRampToValueAtTime(
+        Math.max(vg * 0.22, 1e-4), at + Math.min(len, ATTACK_S + DECAY_S))
+      g.gain.exponentialRampToValueAtTime(1e-4, at + len)
+      g.connect(dest)
+
+      if (v.kind === 'noise') {
+        const src = ctx.createBufferSource()
+        src.buffer = noiseBuffer(ctx)
+        const hp = ctx.createBiquadFilter()
+        hp.type = 'highpass'
+        hp.frequency.value = 2000
+        src.connect(hp).connect(g)
+        src.start(at)
+        src.stop(at + len)
+      } else {
+        const osc = ctx.createOscillator()
+        if (v.kind === 'triangle') osc.type = 'triangle'
+        else osc.setPeriodicWave(wave)
+        osc.frequency.setValueAtTime(f, at)
+        if (glideTo !== undefined) {
+          // 连续滑音：2A03 上没有硬件 portamento，是逐帧写周期寄存器做出来的
+          osc.frequency.linearRampToValueAtTime(root * Math.pow(2, glideTo / 12), at + len)
+        }
+        osc.connect(g)
+        osc.start(at)
+        osc.stop(at + len + 0.02)
+      }
+    }
+  }
+  return end / 1000
 }
 
-/* ── 页面状态 ───────────────────────────────────────────────────────────── */
-let duty = 0.5
-let mel = MELODIES[0]
+/* ── 页面 ─────────────────────────────────────────────────────────────── */
+let dutyOverride = null
+let cand = CANDIDATES[0]
 let char = 'chatgpt'
 let ctx = null
 function audio() {
@@ -153,37 +311,47 @@ function audio() {
   if (ctx.state === 'suspended') ctx.resume()
   return ctx
 }
+function play() {
+  const c = audio()
+  const master = c.createGain()
+  master.gain.value = 0.9
+  master.connect(c.destination)
+  schedule(c, master, cand, charRoot(CHARS[char]), 1, dutyOverride)
+  draw()
+}
 
-/* 占空比按钮 */
+/* 占空比覆盖 */
 const dutyBox = document.getElementById('duty')
-for (const d of [0.5, 0.25, 0.125, 0.75]) {
+const DUTIES = [null, 0.125, 0.25, 0.5]
+DUTIES.forEach((d) => {
   const b = document.createElement('button')
-  b.textContent = `duty ${(d * 100).toFixed(1).replace(/\.0$/, '')}%` + (d === 0.5 ? '（标准方波）' : d === 0.125 ? '（NES 细鼻音）' : '')
-  b.className = d === duty ? 'on' : ''
+  b.textContent = d === null ? '按候选（设计值）' : `duty ${(d * 100).toFixed(1).replace(/\.0$/, '')}%`
+  b.className = d === dutyOverride ? 'on' : ''
   b.onclick = () => {
-    duty = d
+    dutyOverride = d
     ;[...dutyBox.children].forEach((x) => x.classList.remove('on'))
     b.classList.add('on')
     play()
   }
   dutyBox.appendChild(b)
-}
+})
 
-/* 旋律表 */
+/* 候选表 */
 const melBody = document.getElementById('mel')
-MELODIES.forEach((m) => {
+CANDIDATES.forEach((m) => {
   const tr = document.createElement('tr')
-  tr.innerHTML = `<td class="name">${m.name}</td><td class="desc">${m.desc}</td>`
+  tr.innerHTML = `<td class="name">${m.name}</td><td class="tag">${m.struct}</td>`
+    + `<td class="desc">${m.diff}</td>`
   const td = document.createElement('td')
   const b = document.createElement('button')
   b.textContent = '试听'
-  b.onclick = () => { mel = m; mark(); play() }
+  b.onclick = () => { cand = m; mark(); play() }
   td.appendChild(b)
   tr.appendChild(td)
   melBody.appendChild(tr)
   m._btn = b
 })
-function mark() { MELODIES.forEach((m) => m._btn.classList.toggle('on', m === mel)) }
+function mark() { CANDIDATES.forEach((m) => m._btn.classList.toggle('on', m === cand)) }
 mark()
 
 /* 角色按钮 */
@@ -200,32 +368,19 @@ function markChar() {
 }
 markChar()
 
-/* ── 播放 + 离线渲染波形 ────────────────────────────────────────────────── */
-async function play() {
-  const c = audio()
-  const root = charRoot(CHARS[char])
-  const master = c.createGain()
-  master.gain.value = 0.22
-  master.connect(c.destination)
-  const end = schedule(c, master, mel, root, duty, 0.9)
-  await draw(mel, root)
-  document.getElementById('meta').innerHTML =
-    `旋律 <span class="key">${mel.name}</span> · 角色 <span class="key">${char}</span>` +
-    ` · F0 ${CHARS[char]}Hz → 根音 ${root.toFixed(1)}Hz` +
-    ` · duty ${(duty * 100).toFixed(1).replace(/\.0$/, '')}%` +
-    ` · 时长 ${((end - c.currentTime) * 1000).toFixed(0)}ms`
-}
-
-/** 离线渲染同一段旋律，画包络 —— 顺便当客观校验用。 */
-async function draw(m, root) {
-  const dur = (m.deg.length - 1) * m.step + m.len + 0.06
-  const off = new OfflineAudioContext(1, Math.ceil(SR * dur), SR)
+/** 离线渲染当前候选，画包络。 */
+async function draw(sr) {
+  const rate = sr || SR
+  const events = cand.voices.flatMap((v) => v.events)
+  const dur = (Math.max(...events.map((e) => e[1] + e[2])) + 80) / 1000
+  const off = new OfflineAudioContext(1, Math.ceil(rate * dur), rate)
   const g = off.createGain()
   g.gain.value = 0.9
   g.connect(off.destination)
-  schedule(off, g, m, root, duty, 0.9)
+  schedule(off, g, cand, charRoot(CHARS[char]), 1, dutyOverride)
   const buf = await off.startRendering()
   const d = buf.getChannelData(0)
+
   const cv = document.getElementById('wave')
   const g2 = cv.getContext('2d')
   const W = cv.width, H = cv.height
@@ -233,7 +388,7 @@ async function draw(m, root) {
   g2.strokeStyle = '#2a3a55'
   g2.beginPath(); g2.moveTo(0, H / 2); g2.lineTo(W, H / 2); g2.stroke()
   g2.strokeStyle = '#5fd0ff'
-  g2.lineWidth = 2
+  g2.lineWidth = 1.5
   g2.beginPath()
   for (let x = 0; x < W; x++) {
     const s = Math.floor(x / W * d.length)
@@ -244,23 +399,45 @@ async function draw(m, root) {
     x === 0 ? g2.moveTo(x, y) : g2.lineTo(x, y)
   }
   g2.stroke()
-  return buf
+
+  let peak = 0
+  for (let i = 0; i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]))
+  const total = Math.max(...events.map((e) => e[1] + e[2]))
+  document.getElementById('meta').innerHTML =
+    `<span class="key">${cand.name}</span> · ${cand.struct}<br>`
+    + `角色 <span class="key">${char}</span> · F0 ${CHARS[char]}Hz → 根音 ${charRoot(CHARS[char]).toFixed(1)}Hz`
+    + ` · duty ${((dutyOverride ?? cand.duty) * 100).toFixed(1).replace(/\.0$/, '')}%`
+    + ` · 总时长 <span class="key">${total}ms</span> · 峰值 ${peak.toFixed(3)}`
+  return d
 }
 
 /* 给自动化校验用 */
 window.__lab = {
-  MELODIES, CHARS, charRoot, hz, quantize, pulseWave, schedule, draw, SR,
-  async render(melId, dutyV, rootHz, sr) {
+  CANDIDATES, CHARS, charRoot, hz, quantize, pulseWave, schedule, draw, SR,
+  async render(id, dutyV, rootHz, sr, charId) {
     const rate = sr || SR
-    const m = MELODIES.find((x) => x.id === melId)
-    const dur = (m.deg.length - 1) * m.step + m.len + 0.06
+    const c = CANDIDATES.find((x) => x.id === id)
+    const events = c.voices.flatMap((v) => v.events)
+    const dur = (Math.max(...events.map((e) => e[1] + e[2])) + 80) / 1000
     const off = new OfflineAudioContext(1, Math.ceil(rate * dur), rate)
     const g = off.createGain(); g.gain.value = 1; g.connect(off.destination)
-    schedule(off, g, m, rootHz, dutyV, 0.9)
+    schedule(off, g, c, rootHz, 1, dutyV === null ? undefined : dutyV)
     const b = await off.startRendering()
     return Array.from(b.getChannelData(0))
   },
-  /** 在指定采样率的 context 里渲染一个纯音，用来验证跨 context 的音高一致性。 */
+  /** 只渲染某一个声部，用来在隔离条件下核对音高（多声部重叠时测不准）。 */
+  async renderVoice(id, vi, rootHz, sr) {
+    const rate = sr || SR
+    const c = CANDIDATES.find((x) => x.id === id)
+    const v = c.voices[vi]
+    const dur = (Math.max(...v.events.map((e) => e[1] + e[2])) + 80) / 1000
+    const off = new OfflineAudioContext(1, Math.ceil(rate * dur), rate)
+    const g = off.createGain(); g.gain.value = 1; g.connect(off.destination)
+    schedule(off, g, { ...c, voices: [v] }, rootHz, 1, null)
+    const b = await off.startRendering()
+    return Array.from(b.getChannelData(0))
+  },
+  /** 在指定采样率里渲染一个纯音，验证跨 context 的音高一致性。 */
   async tone(dutyV, freq, sr) {
     const off = new OfflineAudioContext(1, sr, sr)
     const g = off.createGain(); g.gain.value = 1; g.connect(off.destination)
@@ -272,9 +449,8 @@ window.__lab = {
   },
 }
 
-/* 首屏只画波形、不出声 —— AudioContext 要用户手势之后才能 resume，
-   这里自动播会得到一个 rejected promise 和控制台报错。 */
-draw(MELODIES[0], charRoot(CHARS[char]))
+/* 首屏只画波形、不出声 —— AudioContext 要用户手势后才能 resume */
+draw()
 </script>
 </body>
 </html>
