@@ -34,6 +34,8 @@ function broadcast(id, opts = {}) {
     // 启动音开关与音量 —— 和宿主 lib/index.js 的 config 一致
     sfx: opts.sfx ?? true,
     sfxVolume: opts.sfxVolume ?? 0.5,
+    // 复古未来音频链（同时作用于语音与启动音）
+    fx: opts.fx ?? true,
   })
   for (const res of clients) {
     try {

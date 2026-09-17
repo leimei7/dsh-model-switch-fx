@@ -59,11 +59,12 @@ await sleep(1200)
 // 必须在第一次播放之前装好（client.js 是惰性建 AudioContext 的）。
 await send('Runtime.evaluate', {
   expression: `(function () {
-    window.__sfx = { osc: 0, noise: 0, wave: 0, ctx: 0, order: [] }
+    window.__sfx = { osc: 0, noise: 0, wave: 0, media: 0, order: [] }
     var AC = window.AudioContext || window.webkitAudioContext
     if (!AC) return
     var p = AC.prototype
     var co = p.createOscillator, cb = p.createBufferSource, cw = p.createPeriodicWave
+    var cm = p.createMediaElementSource
     p.createOscillator = function () {
       window.__sfx.osc++; window.__sfx.order.push(['osc', Date.now()])
       return co.apply(this, arguments)
@@ -76,10 +77,15 @@ await send('Runtime.evaluate', {
       window.__sfx.wave++
       return cw.apply(this, arguments)
     }
+    // 语音是否被路由进复古音频链，就看这个被调用了几次
+    p.createMediaElementSource = function () {
+      window.__sfx.media++; window.__sfx.order.push(['media', Date.now()])
+      return cm.apply(this, arguments)
+    }
   })()`,
 })
 const resetSfx = () => send('Runtime.evaluate', {
-  expression: `(function(){ window.__sfx.osc=0; window.__sfx.noise=0; window.__sfx.wave=0; window.__sfx.order=[] })()`,
+  expression: `(function(){ window.__sfx.osc=0; window.__sfx.noise=0; window.__sfx.wave=0; window.__sfx.media=0; window.__sfx.order=[] })()`,
 })
 const readSfx = async () => JSON.parse((await send('Runtime.evaluate', {
   expression: 'JSON.stringify(window.__sfx)', returnByValue: true,
@@ -436,6 +442,41 @@ console.log('\n[11] 启动音开关：sfx=0 时一个节点都不排')
   const st = await state()
   console.log('   ', st.on ? 'ok  动画不受影响，照常播放' : 'FAIL 动画没播')
   await waitIdle()
+}
+
+console.log('\n[12] 复古音频链：总线建起来 / 语音被路由 / 底噪门跟着过场开关')
+{
+  const info = async () => JSON.parse((await send('Runtime.evaluate', {
+    expression: `JSON.stringify({
+      built: window.__dsfFx.fx.built(),
+      ctxState: window.__dsfFx.fx.ctxState(),
+      gate: window.__dsfFx.fx.noiseGate(),
+      params: window.__dsfFx.fx.params,
+    })`, returnByValue: true,
+  })).result.value)
+
+  await resetSfx()
+  await click('claude')
+  await sleep(600)
+  const during = await info()
+  const got = await readSfx()
+  console.log(`   链路参数：${JSON.stringify(during.params)}`)
+  console.log('  ', during.built ? 'ok  复古音频链已建起（6 个环节）' : 'FAIL 链路没建起来')
+  console.log('  ', during.ctxState === 'running'
+    ? `ok  AudioContext 处于 running（${during.ctxState}）` : `FAIL ctx 状态异常：${during.ctxState}`)
+  console.log('  ', got.media === 1
+    ? 'ok  语音被路由进音频链（createMediaElementSource ×1）'
+    : `FAIL 语音路由次数异常：${got.media}`)
+  console.log('  ', during.gate > 0.3
+    ? `ok  过场期间机械底噪已开门（gate=${during.gate.toFixed(2)}）`
+    : `FAIL 底噪没开门（gate=${during.gate}）`)
+
+  await waitIdle()
+  await sleep(600)
+  const after = await info()
+  console.log('  ', after.gate < 0.05
+    ? `ok  过场结束后底噪已关门（gate=${after.gate.toFixed(3)}）—— 不会一直嗡嗡响`
+    : `FAIL 底噪没关门（gate=${after.gate}）`)
 }
 
 ws.close(); child.kill(); process.exit(0)

@@ -279,16 +279,18 @@ console.log('\n[11] 播放指令必须带上启动音的开关与音量')
   const p = plays(sse)[0]
   check('默认 sfx = true', p?.sfx === true, JSON.stringify(p?.sfx))
   check('默认 sfxVolume = 0.5', p?.sfxVolume === 0.5, JSON.stringify(p?.sfxVolume))
+  check('默认 fx = true（复古音频链）', p?.fx === true, JSON.stringify(p?.fx))
   check('语音音量仍在（0.9）', p?.volume === 0.9, JSON.stringify(p?.volume))
 }
 {
-  // config 能关掉启动音、也能改音量
-  const { routes, emit } = makeCtx({ sfx: false, sfxVolume: 0.25 })
+  // config 能关掉启动音、能改音量、也能关掉复古音频链
+  const { routes, emit } = makeCtx({ sfx: false, sfxVolume: 0.25, fx: false })
   const sse = openSse(routes.get('/model-switch-fx/events'))
   emit(session, { lastUsed: null, pending: route('openai', 'gpt-5') })
   const p = plays(sse)[0]
   check('config.sfx=false 传下去了', p?.sfx === false, JSON.stringify(p?.sfx))
   check('config.sfxVolume=0.25 传下去了', p?.sfxVolume === 0.25, JSON.stringify(p?.sfxVolume))
+  check('config.fx=false 传下去了', p?.fx === false, JSON.stringify(p?.fx))
 }
 
 console.log(`\n结果: ${pass} passed, ${fail} failed\n`)
