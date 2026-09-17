@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Voice FX Lab · 复古未来音频链</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#07070f;color:#c9d1e4;padding:26px 32px 60px;
+    font:13px/1.7 'Cascadia Mono',Consolas,'Courier New',monospace}
+  h1{font-size:17px;letter-spacing:.14em;color:#8ff;margin-bottom:6px}
+  h2{font-size:12px;letter-spacing:.16em;color:#5a6480;margin:24px 0 10px;
+    text-transform:uppercase;font-weight:600}
+  p.note{color:#67718c;max-width:90ch;margin-bottom:14px}
+  code{background:#111726;padding:1px 5px;border-radius:3px;color:#9fd}
+  .row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+  button{font:12px/1 inherit;letter-spacing:.06em;cursor:pointer;
+    background:#0d1320;color:#b9c3d8;border:1px solid #212a3d;border-radius:5px;
+    padding:8px 12px;transition:.12s}
+  button:hover{border-color:#3d4a68;color:#e6ecf7}
+  button.on{background:#13233a;border-color:#3f8fd0;color:#bfe4ff}
+  button.big{padding:10px 16px;border-color:#2b4a6b;color:#bfe4ff}
+  button.warn{border-color:#6b3a2b;color:#e8b08a}
+  table{border-collapse:collapse;width:100%;max-width:1060px}
+  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid #141b29;vertical-align:middle}
+  th{color:#5a6480;font-size:11px;letter-spacing:.1em;font-weight:600}
+  td.stage{color:#dfe7f5;white-space:nowrap}
+  td.desc{color:#67718c;font-size:12px}
+  input[type=range]{width:190px;accent-color:#3f8fd0;vertical-align:middle}
+  .val{color:#8ff;display:inline-block;width:52px;text-align:right}
+  canvas{width:100%;max-width:1060px;height:150px;background:#0a0e18;
+    border:1px solid #1a2233;border-radius:6px;display:block;margin-top:10px}
+  .meta{color:#4d566d;font-size:11px;margin-top:8px;line-height:1.9}
+  .key{color:#8ff}
+  label.sw{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:#9aa6bd}
+</style>
+</head>
+<body>
+<h1>VOICE FX LAB · 复古未来音频链</h1>
+<p class="note">
+  你说的「整个音频」= 11 段语音 + 启动音都要那层<b>老式机械的味道</b>，不只是噪声。
+  这里把一条效果链接在语音上，你听着调。
+  <b>不做破坏性重烤</b> —— 定稿后在插件里用同一条链<b>运行时</b>包住所有音频，可调可关可回退。
+</p>
+<p class="note">
+  六个环节：<b>窄带</b>（老式喇叭/对讲机的频响）· <b>饱和</b>（喇叭过载）·
+  <b>位深</b>（数码毛刺）· <b>抖动</b>（磁带转速不稳）· <b>小空间</b>（机箱/金属箱体）·
+  <b>机械底噪</b>（电流嗡鸣 + 嘶声）。
+  最下面有频谱，能直接看出窄带削掉了多少高低频。
+</p>
+
+<h2>预设</h2>
+<div class="row" id="presets"></div>
+<div class="row">
+  <button class="big" id="play">▶ 播放（湿声）</button>
+  <button class="big warn" id="ab">A/B：干声 ↔ 湿声</button>
+  <span id="abState" class="meta" style="margin:0 0 0 8px"></span>
+</div>
+
+<h2>角色</h2>
+<div class="row" id="chars"></div>
+
+<h2>环节</h2>
+<table>
+  <thead><tr><th>环节</th><th>强度</th><th></th><th>说明</th></tr></thead>
+  <tbody id="stages"></tbody>
+</table>
+
+<h2>频谱（干声 vs 湿声叠在一起）</h2>
+<canvas id="spec" width="2120" height="300"></canvas>
+<div class="meta" id="meta">—</div>
+
+<script>
+'use strict'
+
+const BASE = '../assets'
+const CHARS = ['chatgpt', 'gemini', 'claude', 'kimi', 'deepseek', 'glm',
+  'qwen', 'grok', 'minimax', 'musespark', 'mimo']
+
+/* ── 参数 ──────────────────────────────────────────────────────────────── */
+const DEFAULTS = {
+  band: 0,    // 0=全带宽，1=最窄
+  drive: 0,   // 喇叭过载
+  bits: 0,    // 0=关，越小越脏
+  wow: 0,     // 磁带转速不稳
+  room: 0,    // 机箱/金属箱体
+  noise: 0,   // 机械底噪
+}
+let P = { ...DEFAULTS }
+
+const PRESETS = [
+  { id: 'dry', name: '干燥（原始）', v: { band: 0, drive: 0, bits: 0, wow: 0, room: 0, noise: 0 } },
+  { id: 'light', name: '轻度', v: { band: 0.25, drive: 0.15, bits: 0, wow: 0.1, room: 0.15, noise: 0.08 } },
+  { id: 'intercom', name: '对讲机', v: { band: 0.68, drive: 0.3, bits: 0, wow: 0.05, room: 0.2, noise: 0.16 } },
+  { id: 'vintage', name: '古董机', v: { band: 0.5, drive: 0.45, bits: 0, wow: 0.4, room: 0.4, noise: 0.3 } },
+  { id: 'digital', name: '数码（80s）', v: { band: 0.3, drive: 0.1, bits: 6, wow: 0, room: 0.1, noise: 0.1 } },
+  { id: 'hybrid', name: '混合（模拟+数码）', v: { band: 0.45, drive: 0.3, bits: 7, wow: 0.22, room: 0.28, noise: 0.2 } },
+  { id: 'heavy', name: '极重（古董广播）', v: { band: 0.85, drive: 0.6, bits: 6, wow: 0.5, room: 0.5, noise: 0.45 } },
+]
+
+const STAGES = [
+  { key: 'band', min: 0, max: 1, step: 0.01, desc: '老式喇叭/对讲机的频响：越强，高低频削得越狠' },
+  { key: 'drive', min: 0, max: 1, step: 0.01, desc: '喇叭过载的软削波，加奇次谐波' },
+  { key: 'bits', min: 0, max: 12, step: 1, desc: '位深缩减。0=关，8=轻，5=明显，3=很脏' },
+  { key: 'wow', min: 0, max: 1, step: 0.01, desc: '磁带转速不稳（调制延迟）—— 老机械特有的"晃"' },
+  { key: 'room', min: 0, max: 1, step: 0.01, desc: '机箱/金属箱体的小空间反射' },
+  { key: 'noise', min: 0, max: 1, step: 0.01, desc: '电流嗡鸣（50Hz 及谐波）+ 嘶声底噪' },
+]
+
+/* ── 曲线 / 缓冲 ───────────────────────────────────────────────────────── */
+const SEED = 0x2f6e2b1
+function prng(seed) {
+  let s = seed
+  return function () {
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    return s / 0x3fffffff - 1
+  }
+}
+
+/** 软削波（tanh 型），k 越大越硬。 */
+function driveCurve(k) {
+  const n = 4096
+  const c = new Float32Array(n)
+  const norm = Math.tanh(k) || 1
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1
+    c[i] = Math.tanh(k * x) / norm
+  }
+  return c
+}
+
+/** 位深缩减。 */
+function crushCurve(bits) {
+  const n = 8192
+  const c = new Float32Array(n)
+  const levels = Math.pow(2, bits) - 1
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1
+    c[i] = (Math.round(((x + 1) / 2) * levels) / levels) * 2 - 1
+  }
+  return c
+}
+
+/** 小空间脉冲响应：指数衰减噪声 + 几个早期反射。 */
+function makeIR(ctx, seconds, decay) {
+  const n = Math.max(1, Math.floor(ctx.sampleRate * seconds))
+  const buf = ctx.createBuffer(2, n, ctx.sampleRate)
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch)
+    const rnd = prng(SEED + ch * 7919)
+    for (let i = 0; i < n; i++) d[i] = rnd() * Math.pow(1 - i / n, decay)
+    // 两个早期反射让"箱体"感更具体
+    for (const [ms, g] of [[7, 0.5], [13, 0.35], [23, 0.22]]) {
+      const at = Math.floor(ctx.sampleRate * ms / 1000)
+      if (at < n) d[at] += g * (ch === 0 ? 1 : -1)
+    }
+  }
+  return buf
+}
+
+/** 底噪缓冲：电流嗡鸣 + 嘶声，循环用。 */
+function makeNoise(ctx, seconds) {
+  const n = Math.floor(ctx.sampleRate * seconds)
+  const buf = ctx.createBuffer(1, n, ctx.sampleRate)
+  const d = buf.getChannelData(0)
+  const rnd = prng(SEED ^ 0x5bd1)
+  const hum = [50, 100, 150, 250]
+  for (let i = 0; i < n; i++) {
+    const t = i / ctx.sampleRate
+    let v = rnd() * 0.35                       // 嘶声
+    for (let h = 0; h < hum.length; h++) {
+      v += Math.sin(2 * Math.PI * hum[h] * t) * (0.5 / (h + 1)) * 0.5
+    }
+    // 首尾交叉淡化，循环无缝
+    const fade = Math.min(1, i / (n * 0.05), (n - i) / (n * 0.05))
+    d[i] = v * fade
+  }
+  return buf
+}
+
+/* ── 效果链 ───────────────────────────────────────────────────────────── */
+let ctx = null
+let irCache = null
+let noiseCache = null
+const live = { src: null, nodes: [], lfos: [], audio: null }
+
+function audio() {
+  if (ctx === null) ctx = new (window.AudioContext || window.webkitAudioContext)()
+  if (ctx.state === 'suspended') ctx.resume()
+  return ctx
+}
+
+/**
+ * 把 inNode → ... → outNode 的整条链接好。
+ * 返回 { input, output }；调用方负责把源接进 input、把 output 接到 destination。
+ */
+function buildChain(c, p, target) {
+  const nodes = []
+  const input = c.createGain()
+  let cur = input
+
+  // 顺序有讲究：真实信号链是「功放失真 → 喇叭带宽」。
+  // 反过来（先窄带再饱和）会让饱和加出的高次谐波没被喇叭削掉，
+  // 「古董机」反而成了整组最亮的 —— 校验脚本的明暗轴把它照出来了。
+  if (p.drive > 0) {
+    const sh = c.createWaveShaper()
+    sh.curve = driveCurve(1 + p.drive * 12)
+    sh.oversample = '2x'
+    const pre = c.createGain()
+    pre.gain.value = 1 + p.drive * 1.5
+    const post = c.createGain()
+    post.gain.value = 1 / (1 + p.drive * 0.9)
+    cur.connect(pre); pre.connect(sh); sh.connect(post)
+    cur = post
+    nodes.push(pre, sh, post)
+  }
+
+  if (p.band > 0) {
+    // 老式喇叭：低频起点随强度上移，高频截止随强度下移
+    const hp = c.createBiquadFilter()
+    hp.type = 'highpass'
+    hp.frequency.value = 60 + p.band * 520          // 60 → 580Hz
+    hp.Q.value = 0.7
+    const lp = c.createBiquadFilter()
+    lp.type = 'lowpass'
+    // 16kHz → 2.6kHz：强度拉满时接近电话带宽，但还没到听不清的程度
+    lp.frequency.value = 16000 * Math.pow(0.16, p.band)
+    lp.Q.value = 0.7
+    // 中频稍微抬一点，像小喇叭的共振
+    const peak = c.createBiquadFilter()
+    peak.type = 'peaking'
+    peak.frequency.value = 1800
+    peak.Q.value = 1.0
+    peak.gain.value = 2 + p.band * 5
+    cur.connect(hp); hp.connect(lp); lp.connect(peak)
+    cur = peak
+    nodes.push(hp, lp, peak)
+  }
+
+  if (p.bits > 0) {
+    const sh = c.createWaveShaper()
+    sh.curve = crushCurve(p.bits)
+    sh.oversample = 'none'
+    cur.connect(sh)
+    cur = sh
+    nodes.push(sh)
+  }
+
+  if (p.wow > 0) {
+    // 调制延迟 = 磁带转速不稳
+    const delay = c.createDelay(0.06)
+    delay.delayTime.value = 0.009
+    const lfo = c.createOscillator()
+    lfo.frequency.value = 0.6 + p.wow * 1.6          // 0.6 → 2.2Hz
+    const amt = c.createGain()
+    amt.gain.value = 0.0004 + p.wow * 0.0042         // 深度
+    lfo.connect(amt); amt.connect(delay.delayTime)
+    lfo.start()
+    const mix = c.createGain()
+    mix.gain.value = 1
+    cur.connect(delay); delay.connect(mix)
+    cur = mix
+    nodes.push(delay, lfo, amt, mix)
+    live.lfos.push(lfo)
+  }
+
+  if (p.room > 0) {
+    const conv = c.createConvolver()
+    conv.buffer = irCache
+    const wet = c.createGain()
+    wet.gain.value = p.room * 0.55
+    const dry = c.createGain()
+    dry.gain.value = 1 - p.room * 0.25
+    const sum = c.createGain()
+    cur.connect(dry); dry.connect(sum)
+    cur.connect(conv); conv.connect(wet); wet.connect(sum)
+    cur = sum
+    nodes.push(conv, wet, dry, sum)
+  }
+
+  const output = c.createGain()
+  cur.connect(output)
+
+  if (p.noise > 0) {
+    // 底噪分两路：嘶声走高通，电流嗡鸣走低通。
+    // （曾经把两路合成一路再送 1200Hz 带通 —— 50Hz 嗡鸣被滤得只剩 0.0009，
+    //   校验脚本直接抓出来了。）
+    const src = c.createBufferSource()
+    src.buffer = noiseCache
+    src.loop = true
+
+    const hissHp = c.createBiquadFilter()
+    hissHp.type = 'highpass'
+    hissHp.frequency.value = 900
+    const hissG = c.createGain()
+    hissG.gain.value = p.noise * 0.055
+    src.connect(hissHp); hissHp.connect(hissG); hissG.connect(output)
+
+    const humLp = c.createBiquadFilter()
+    humLp.type = 'lowpass'
+    humLp.frequency.value = 400
+    humLp.Q.value = 0.7
+    const humG = c.createGain()
+    humG.gain.value = p.noise * 0.5
+    src.connect(humLp); humLp.connect(humG); humG.connect(output)
+
+    src.start()
+    nodes.push(src, hissHp, hissG, humLp, humG)
+    live.lfos.push(src)
+  }
+
+  // **声源接进 input**（不是 output）—— 接 output 会把整条链旁路掉
+  target.connect(input)
+  return { input, output, nodes }
+}
+
+/* ── 分析 ─────────────────────────────────────────────────────────────── */
+let analyser = null
+let specDry = null, specWet = null
+
+/* ── 播放 ─────────────────────────────────────────────────────────────── */
+let char = 'chatgpt'
+let abWet = true
+
+function stopAll() {
+  if (live.audio) { try { live.audio.pause() } catch (e) {} live.audio = null }
+  for (const n of live.lfos) { try { n.stop() } catch (e) {} }
+  for (const n of live.nodes) { try { n.disconnect() } catch (e) {} }
+  live.lfos = []; live.nodes = []
+}
+
+/** 播一次；wet=false 时绕过整条链（干声）。 */
+function play(wet) {
+  const c = audio()
+  if (irCache === null) irCache = makeIR(c, 0.28, 3.2)
+  if (noiseCache === null) noiseCache = makeNoise(c, 1.0)
+  if (analyser === null) {
+    analyser = c.createAnalyser()
+    analyser.fftSize = 4096
+    analyser.smoothingTimeConstant = 0.75
+    analyser.connect(c.destination)
+  }
+  stopAll()
+
+  const el = new Audio(BASE + '/' + char + '.mp3')
+  el.preload = 'auto'
+  const src = c.createMediaElementSource(el)
+  live.audio = el
+  live.src = src
+
+  const chain = buildChain(c, wet ? P : DEFAULTS, src)
+  live.nodes = chain.nodes
+  chain.output.connect(analyser)
+  const played = el.play()
+  if (played && played.catch) played.catch(function () {})
+  sampleSpectrum()
+  return chain
+}
+
+/** 抓一段频谱用来画图（干/湿各抓一次）。 */
+let specTimer = null
+function sampleSpectrum() {
+  if (specTimer !== null) return
+  const buf = new Float32Array(analyser.frequencyBinCount)
+  specTimer = setInterval(() => {
+    analyser.getFloatFrequencyData(buf)
+    const arr = new Float32Array(buf.length)
+    arr.set(buf)
+    if (abWet) specWet = arr; else specDry = arr
+    drawSpec()
+  }, 60)
+}
+
+function drawSpec() {
+  const cv = document.getElementById('spec')
+  const g = cv.getContext('2d')
+  const W = cv.width, H = cv.height
+  g.clearRect(0, 0, W, H)
+  g.fillStyle = '#0a0e18'
+  g.fillRect(0, 0, W, H)
+  // 频率刻度（对数）
+  const fMin = 40, fMax = 16000
+  const xOf = (f) => Math.log(f / fMin) / Math.log(fMax / fMin) * W
+  g.strokeStyle = '#1a2233'
+  g.fillStyle = '#3d4658'
+  g.font = '18px monospace'
+  for (const f of [100, 300, 1000, 3000, 8000]) {
+    const x = xOf(f)
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke()
+    g.fillText(f >= 1000 ? (f / 1000) + 'k' : String(f), x + 4, H - 6)
+  }
+  const yOf = (db) => (db + 100) / 100 * H        // -100..0 dB
+  const line = (spec, color, width) => {
+    if (!spec) return
+    g.strokeStyle = color
+    g.lineWidth = width
+    g.beginPath()
+    let started = false
+    for (let x = 0; x < W; x++) {
+      const f = fMin * Math.pow(fMax / fMin, x / W)
+      const bin = Math.round(f / (ctx.sampleRate / 2) * spec.length)
+      if (bin < 1 || bin >= spec.length) continue
+      const y = yOf(spec[bin])
+      started ? g.lineTo(x, y) : (g.moveTo(x, y), started = true)
+    }
+    g.stroke()
+  }
+  line(specDry, '#3d5a78', 2)
+  line(specWet, '#5fd0ff', 2)
+  document.getElementById('meta').innerHTML =
+    `干声 <span style="color:#3d5a78">■</span> 湿声 <span class="key">■</span>`
+}
+
+/* ── UI ───────────────────────────────────────────────────────────────── */
+const presetsBox = document.getElementById('presets')
+PRESETS.forEach((ps) => {
+  const b = document.createElement('button')
+  b.textContent = ps.name
+  b.onclick = () => {
+    P = { ...ps.v }
+    syncUI()
+    markPreset(ps.id)
+    play(true)
+  }
+  b.dataset.id = ps.id
+  presetsBox.appendChild(b)
+})
+function markPreset(id) {
+  ;[...presetsBox.children].forEach((b) => b.classList.toggle('on', b.dataset.id === id))
+}
+
+const charsBox = document.getElementById('chars')
+CHARS.forEach((id) => {
+  const b = document.createElement('button')
+  b.textContent = id
+  b.onclick = () => {
+    char = id
+    ;[...charsBox.children].forEach((x) => x.classList.toggle('on', x === b))
+    play(true)
+  }
+  charsBox.appendChild(b)
+  if (id === char) b.classList.add('on')
+})
+
+const stagesBox = document.getElementById('stages')
+const sliders = {}
+for (const st of STAGES) {
+  const tr = document.createElement('tr')
+  const td1 = document.createElement('td')
+  td1.className = 'stage'
+  td1.textContent = { band: '窄带', drive: '饱和', bits: '位深', wow: '抖动', room: '小空间', noise: '机械底噪' }[st.key]
+  const td2 = document.createElement('td')
+  const r = document.createElement('input')
+  r.type = 'range'; r.min = st.min; r.max = st.max; r.step = st.step; r.value = P[st.key]
+  const val = document.createElement('span')
+  val.className = 'val'
+  const show = () => {
+    val.textContent = st.key === 'bits'
+      ? (Number(r.value) === 0 ? '关' : r.value + 'bit')
+      : Number(r.value).toFixed(2)
+  }
+  r.oninput = () => { P[st.key] = Number(r.value); show(); markPreset(''); }
+  r.onchange = () => play(true)
+  show()
+  td2.appendChild(r); td2.appendChild(val)
+  const td3 = document.createElement('td')
+  const off = document.createElement('button')
+  off.textContent = '归零'
+  off.onclick = () => { P[st.key] = st.min; r.value = st.min; show(); markPreset(''); play(true) }
+  td3.appendChild(off)
+  const td4 = document.createElement('td')
+  td4.className = 'desc'
+  td4.textContent = st.desc
+  tr.append(td1, td2, td3, td4)
+  stagesBox.appendChild(tr)
+  sliders[st.key] = { input: r, show }
+}
+function syncUI() {
+  for (const k of Object.keys(sliders)) {
+    sliders[k].input.value = P[k]
+    sliders[k].show()
+  }
+}
+syncUI()
+markPreset('dry')
+
+document.getElementById('play').onclick = () => { abWet = true; updateAb(); play(true) }
+document.getElementById('ab').onclick = () => { abWet = !abWet; updateAb(); play(abWet) }
+function updateAb() {
+  document.getElementById('abState').textContent = abWet ? '当前：湿声（带效果链）' : '当前：干声（原始）'
+}
+updateAb()
+
+/* 给自动化校验用 */
+window.__vlab = {
+  PRESETS, STAGES, DEFAULTS, CHARS,
+  get params() { return { ...P } },
+  get wet() { return abWet },
+  setParams(v) { P = { ...P, ...v }; syncUI(); return { ...P } },
+  applyPreset(id) {
+    const ps = PRESETS.find((x) => x.id === id)
+    if (ps) { P = { ...ps.v }; syncUI(); markPreset(id) }
+    return { ...P }
+  },
+  /**
+   * 离线渲染：把一段纯音送进链 vs 不进链，用来做客观对比。
+   * `srcSeconds` 让声源提前停止 —— 这样才能量混响尾巴与底噪本底。
+   */
+  async renderTest(p, seconds, sr, srcSeconds) {
+    const rate = sr || 44100
+    const off = new OfflineAudioContext(1, Math.ceil(rate * seconds), rate)
+    if (irCache === null) irCache = makeIR(off, 0.28, 3.2)
+    if (noiseCache === null) noiseCache = makeNoise(off, 1.0)
+    const osc = off.createOscillator()
+    osc.setPeriodicWave(off.createPeriodicWave(new Float32Array(2), new Float32Array([0, 1])))
+    osc.frequency.value = 440
+    const chain = buildChain(off, p, osc)
+    chain.output.connect(off.destination)
+    const on = srcSeconds === undefined ? seconds : srcSeconds
+    osc.start(0)
+    osc.stop(on)
+    const buf = await off.startRendering()
+    const out = { samples: Array.from(buf.getChannelData(0)), srcSeconds: on, sr: rate }
+    return out
+  },
+}
+</script>
+</body>
+</html>
