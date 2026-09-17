@@ -91,6 +91,9 @@ const readSfx = async () => JSON.parse((await send('Runtime.evaluate', {
   expression: 'JSON.stringify(window.__sfx)', returnByValue: true,
 })).result.value)
 
+/** 混响湿声增益的推导（和 lib/client.js 里一致）：wet.gain = room × 0.55。 */
+const wetGain = (room) => (room * 0.55).toFixed(3)
+
 /**
  * 轮询等到浮层收起。
  * **不要写死时长** —— 总时长现在是算出来的：语音约束、公司名约束、
@@ -477,6 +480,71 @@ console.log('\n[12] 复古音频链：总线建起来 / 语音被路由 / 底噪
   console.log('  ', after.gate < 0.05
     ? `ok  过场结束后底噪已关门（gate=${after.gate.toFixed(3)}）—— 不会一直嗡嗡响`
     : `FAIL 底噪没关门（gate=${after.gate}）`)
+}
+
+console.log('\n[13] 混响量：调小 room 必须真的缩短尾音（用户反馈「空灵感太强」）')
+{
+  // 用**实际发货的那条链**离线渲染，只改一个参数来对比 —— 验的是发货值本身。
+  const params = JSON.parse((await send('Runtime.evaluate', {
+    expression: 'JSON.stringify(window.__dsfFx.fx.params)', returnByValue: true,
+  })).result.value)
+  const SR = 44100, DUR = 1.6, SRC = 0.7
+  const render = async (p, wave, src) => JSON.parse((await send('Runtime.evaluate', {
+    expression: `window.__dsfFx.fx.renderTest(${JSON.stringify(p)}, ${DUR}, ${SR}, `
+      + `${src === undefined ? SRC : src}${wave ? `, '${wave}'` : ''})`
+      + `.then(r=>JSON.stringify(r.samples))`,
+    awaitPromise: true, returnByValue: true,
+  })).result.value)
+
+  const tailRms = (a) => {
+    const from = Math.floor((SRC + 0.15) * SR)
+    let s = 0
+    for (let i = from; i < a.length; i++) s += a[i] * a[i]
+    return Math.sqrt(s / Math.max(1, a.length - from))
+  }
+
+  // ① 尾音：**必须关掉机械底噪**再量 —— 底噪是常驻本底，会把它整个淹掉
+  //    （第一次就是这么错的：开着 noise 量出 0.01238 vs 0.01239，纹丝不动）
+  const reverbOnly = { ...params, noise: 0 }
+  const now = await render(reverbOnly)
+  const before = await render({ ...reverbOnly, room: 0.25 })
+  const tNow = tailRms(now), tBefore = tailRms(before)
+  console.log(`   room 参数：${params.room}（旧值 0.25）`)
+  console.log(`   混响湿声增益：${wetGain(params.room)}（旧 ${wetGain(0.25)}）`)
+  console.log(`   关掉底噪后的尾巴 RMS：现在 ${tNow.toFixed(6)} ← 旧值 ${tBefore.toFixed(6)}`)
+  const drop = 20 * Math.log10(tNow / tBefore)
+  console.log('  ', tNow < tBefore * 0.8
+    ? `ok  尾音确实缩短了（${drop.toFixed(1)}dB）` : `FAIL 尾音没怎么变（${drop.toFixed(1)}dB）`)
+  console.log('  ', tNow > 1e-6
+    ? 'ok  仍保留少量空间感（不是完全没有混响）' : `FAIL 混响被砍没了（${tNow}）`)
+
+  // ② 窄带不能被顺手改掉 —— 用户说「其他还好」。
+  //    声源要用**方波**：纯正弦没有高频可削，量出来的是谐波与量化噪声，不是窄带。
+  //    阈值别照抄试听台的：那边测的是 band 0.9，发货值是 0.55
+  //    （低通约 5.5kHz，是「小喇叭」不是「电话」），高频只降 7dB 左右。
+  //    所以断言的是真正的性质：**高频明显下降 + 中频保留**。
+  const bandAt = (a, freqs) => {
+    const to = Math.floor(SRC * SR)
+    const goertzel = (f) => {
+      const w = 2 * Math.PI * f / SR, c = 2 * Math.cos(w)
+      let s1 = 0, s2 = 0
+      for (let i = 0; i < to; i++) { const s0 = a[i] + c * s1 - s2; s2 = s1; s1 = s0 }
+      return Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - c * s1 * s2)) / to
+    }
+    let s = 0
+    for (const f of freqs) s += goertzel(f) ** 2
+    return Math.sqrt(s / freqs.length)
+  }
+  const sqOn = await render({ ...reverbOnly, band: 0.55 }, 'square')
+  const sqOff = await render({ ...reverbOnly, band: 0 }, 'square')
+  const hi = bandAt(sqOn, [8000, 10000, 12000]) / bandAt(sqOff, [8000, 10000, 12000])
+  const mid = bandAt(sqOn, [800, 1200, 1800]) / bandAt(sqOff, [800, 1200, 1800])
+  console.log(`   方波源：高频(8k~12k) ${hi.toFixed(3)}（${(20 * Math.log10(hi)).toFixed(1)}dB）`
+    + `   中频(800~1800) ${mid.toFixed(3)}（${(20 * Math.log10(mid)).toFixed(1)}dB）`)
+  console.log('  ', hi < 0.6
+    ? `ok  窄带仍然生效：高频降了 ${(-20 * Math.log10(hi)).toFixed(1)}dB` : `FAIL 窄带失效（${hi.toFixed(3)}）`)
+  console.log('  ', mid > 0.5 && mid < 2
+    ? `ok  中频保留（${mid.toFixed(3)}）—— 语音可懂度没被削掉` : `FAIL 中频被改动（${mid.toFixed(3)}）`)
 }
 
 ws.close(); child.kill(); process.exit(0)
