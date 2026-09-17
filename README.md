@@ -41,6 +41,8 @@
 
 ![12 个角色](docs/characters.png)
 
+<sub>上图按下方「角色一览」表的顺序排列：ChatGPT · Gemini · Claude · Kimi / DeepSeek · GLM · Qwen · Grok / MiniMax · MuseSpark · MiMo · 豆包</sub>
+
 一次过场里发生的事：
 
 - logo **描边逐段绘制** → 实心淡入 → 保持发光 → 停留 → 淡出
