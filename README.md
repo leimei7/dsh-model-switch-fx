@@ -66,6 +66,10 @@
 | MiniMax 娘 | MiniMax Group Inc. | `minimax` / `hailuo` / `abab` | Hello. Hmm, well. MiniMax online. | 5.44s | 7.38s |
 | MuseSpark 娘 | Meta | `musespark` / `muse-spark` / `meta` | Hello. What's up? MuseSpark online. | 3.36s | 6.38s |
 | MiMo 娘 | Xiaomi MiMo | `mimo` / `xiaomi` | Hello. Let's go! MiMo online. | 4.48s | 6.42s |
+| 豆包姐姐 | ByteDance | `doubao` / `volcengine` | 你好，完全没问题！豆包已连接 | 3.00s | 6.38s |
+
+> 豆包是**唯一的中文角色**（其余 11 个都是英文台词）—— 它的语音来自用户提供的
+> 豆包原生录音，不是 TTS 生成，所以音色就是豆包本人的。见下方「语音管线」。
 
 匹配走 `provider/model` 的**小写子串**，第一命中即返回。所以：
 
@@ -230,6 +234,7 @@ dsh plugin --profile web remove dsh-model-switch-fx
 | minimax | ⑧ 滑音八度 | 连续滑音 + 双八度终结 · duty 50% |
 | musespark | ⑥ 和弦击 | 两个 25ms 琶音和弦 · duty 12.5% |
 | mimo | ⑨ 锯齿上升 | 跳进-回落-再跳进 · duty 25% |
+| doubao | ⑬ 欢快颤音 | 3 音上行 + 尾段快速颤音收束 · duty 25% |
 
 试听与调参在 `tools/sfx-lab.html`（浏览器直接打开，不用起服务）。
 它是这些数据的**单一事实来源**：改完跑 `node tools/gen-sfx.mjs` 同步进 `lib/client.js`。
@@ -388,6 +393,8 @@ cordis.patch.yml   插件挂载点
 tools/
   gen-logos.mjs      从 showcase.html 提取 logo 路径数据
   gen-sfx.mjs        从 sfx-lab.html 提取启动音数据（程序化合成，无音频文件）
+  gen-voice.py       角色语音管线（TTS 或处理现成音频 → 后处理 → 响度归一化）
+  measure-f0.py      量每段语音的基频中位数，给该角色的启动音定调性
   preview.mjs        独立预览服务器，不开 DSH 也能调动画
   test-watch.mjs     宿主侧触发 / 去重 / 路由匹配 / 播放指令自测
   test-takeover.mjs  浏览器端：接管、模态、公司名、染色、启动音断言

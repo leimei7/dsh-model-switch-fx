@@ -260,6 +260,9 @@ console.log('\n[10] 真实路由 → 角色 对照表（每加一个角色都该
     ['meta-ai', 'muse-spark-pro', 'musespark'],
     ['xiaomi-token-plan-cn', 'mimo-v2.5', 'mimo'],
     ['xiaomi', 'mimo-7b', 'mimo'],
+    // 豆包：用户实际用的 provider 就叫 doubao，模型是 doubao-seed-2-1-turbo
+    ['doubao', 'doubao-seed-2-1-turbo-260628', 'doubao'],
+    ['volcengine', 'seed-2-1-turbo', 'doubao'],
     ['some-vendor', 'unknown-model-x1', undefined],
   ]
   for (const [provider, model, want] of table) {

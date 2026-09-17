@@ -169,7 +169,7 @@ for (const c of CANDS) {
   const dbNow = 20 * Math.log10(
     Math.max(...crushedList.map((c, i) => c.rms * (gainMap2[c.id] ?? 1)))
     / Math.min(...crushedList.map((c, i) => c.rms * (gainMap2[c.id] ?? 1))))
-  chk(dbNow < 3, `11 个候选响度一致（极差 ${dbNow.toFixed(2)} dB < 3）`)
+  chk(dbNow < 3, `${CANDS.length} 个候选响度一致（极差 ${dbNow.toFixed(2)} dB < 3）`)
   chk(crushedList.every((c) => c.rms > 0.02), '所有候选量化后仍非静音')
 }
 
@@ -343,7 +343,7 @@ console.log('\n[7] 分配是否一一对应 + 两两差异度')
   chk(Object.keys(assign).length === Object.keys(chars).length,
     `每个角色都分配了（${Object.keys(assign).length}/${Object.keys(chars).length}）`)
   chk(new Set(used).size === used.length,
-    `11 个角色拿到 11 个**互不相同**的方案（去重后 ${new Set(used).size} 个）`)
+    `${used.length} 个角色拿到 ${used.length} 个**互不相同**的方案（去重后 ${new Set(used).size} 个）`)
   chk(used.every((u) => CANDS.some((c) => c.id === u)), `分配的方案 id 都存在`)
   const unused = CANDS.filter((c) => !used.includes(c.id))
   console.log(`    未分配（留在方案库里备选）：${unused.length ? unused.map((c) => c.name).join('、') : '无'}`)
@@ -446,11 +446,12 @@ await sleep(700)
       const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data
       let n=0; for(let i=3;i<d.length;i+=4) if(d[i]>0) n++; return n})(),
   })`))
-  chk(ui.assignRows === 11, `角色→方案 表 ${ui.assignRows}/11 行`)
-  chk(ui.assignButtons === 11, `角色试听按钮 ${ui.assignButtons}/11`)
+  const nChars = Object.keys(JSON.parse(await evalIn('JSON.stringify(window.__lab.CHARS)'))).length
+  chk(ui.assignRows === nChars, `角色→方案 表 ${ui.assignRows}/${nChars} 行`)
+  chk(ui.assignButtons === nChars, `角色试听按钮 ${ui.assignButtons}/${nChars}`)
   chk(ui.libRows === CANDS.length, `方案库 ${ui.libRows}/${CANDS.length} 行`)
   chk(ui.libButtons === CANDS.length, `方案库试听按钮 ${ui.libButtons}/${CANDS.length}`)
-  chk(ui.playAll, '「依次播放全部 11 个」按钮存在')
+  chk(ui.playAll, `「依次播放全部 ${nChars} 个」按钮存在`)
   chk(ui.canvas > 1000, `首屏波形已绘制（${ui.canvas} 个不透明像素）`)
 }
 

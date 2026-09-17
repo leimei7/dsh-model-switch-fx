@@ -270,12 +270,13 @@ const ASSIGN = {
   minimax: 'glide',      // 连续滑音，「人的温度」
   musespark: 'stab',     // 活泼前台：两个和弦击
   mimo: 'zigzag',        // 灵动跳跃
+  doubao: 'trill',       // 轻快热心：尾巴做颤音，最「雀跃」
 }
 
 /* 角色 F0：来自 assets/*.mp3 的实测（自相关音高跟踪） */
 const CHARS = {
   claude: 155, kimi: 222, qwen: 222, minimax: 241, glm: 242, musespark: 255,
-  chatgpt: 279, grok: 329, deepseek: 333, mimo: 369, gemini: 429,
+  doubao: 255, chatgpt: 279, grok: 329, deepseek: 333, mimo: 369, gemini: 429,
 }
 const F0_MIN = 155, F0_MAX = 429
 const ROOT_LO = 440, ROOT_HI = 659.25
