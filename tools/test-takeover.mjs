@@ -397,7 +397,13 @@ console.log('\n[10] 启动音：按方案排布声部（拦截 Web Audio 节点�
     console.log(`      ${cid.padEnd(11)} ${s.name.padEnd(9)} 脉冲×${s.pulse} 噪声×${s.noise}`
       + `  F0 ${s.f0}Hz → 根音 ${s.root}Hz`)
   }
-  console.log('  ', Object.keys(spec).length === 11 ? 'ok  11 个角色都有方案与基频' : `FAIL 只有 ${Object.keys(spec).length} 个`)
+  // 角色数别写死：从预览页上实际渲染出来的角色按钮取
+  const nChars = (await send('Runtime.evaluate', {
+    expression: 'document.querySelectorAll("button[data-id]").length', returnByValue: true,
+  })).result.value
+  console.log('  ', Object.keys(spec).length === nChars
+    ? `ok  ${nChars} 个角色都有方案与基频`
+    : `FAIL 页面 ${nChars} 个角色，但只有 ${Object.keys(spec).length} 个有方案与基频`)
 
   // 逐个角色实际播一次，核对节点数
   let mismatch = []
@@ -535,16 +541,26 @@ console.log('\n[13] 混响量：调小 room 必须真的缩短尾音（用户反
     for (const f of freqs) s += goertzel(f) ** 2
     return Math.sqrt(s / freqs.length)
   }
-  const sqOn = await render({ ...reverbOnly, band: 0.55 }, 'square')
-  const sqOff = await render({ ...reverbOnly, band: 0 }, 'square')
+  // **隔离「窄带」这一环**：把 wow/drive/bits/room 都关掉再比。
+  // 不能拿发货参数直接比 —— wow 是调制延迟，会把谐波抹开，
+  // 抹开的程度又取决于信号频谱有多锐（band 开/关差很多），比值会严重被污染：
+  // wow 从 0.22 降到 0.06 时这个测试就从 -6.8dB 跳到 -1.8dB，看着像"窄带失效"，
+  // 其实低通一动没动。隔离之后测的才是 band 本身。
+  const iso = { band: params.band, drive: 0, bits: 0, wow: 0, room: 0, noise: 0 }
+  const sqOn = await render(iso, 'square')
+  const sqOff = await render({ ...iso, band: 0 }, 'square')
   const hi = bandAt(sqOn, [8000, 10000, 12000]) / bandAt(sqOff, [8000, 10000, 12000])
-  const mid = bandAt(sqOn, [800, 1200, 1800]) / bandAt(sqOff, [800, 1200, 1800])
+  // 可懂度看**基频保没保住**，而不是随便挑几个中频点。
+  // 曾经量 800/1200/1800Hz：方波的谐波在 1320/2200，那几个点原始信号本来就没能量，
+  // 而 1800Hz 又正好撞上中频共振 —— 比值虚高到 7.5×（+17.5dB），
+  // 看着像"中频被改了"，其实只是采样点选错了。
+  const fund = bandAt(sqOn, [440]) / bandAt(sqOff, [440])
   console.log(`   方波源：高频(8k~12k) ${hi.toFixed(3)}（${(20 * Math.log10(hi)).toFixed(1)}dB）`
-    + `   中频(800~1800) ${mid.toFixed(3)}（${(20 * Math.log10(mid)).toFixed(1)}dB）`)
+    + `   基频 440Hz ${fund.toFixed(3)}（${(20 * Math.log10(fund)).toFixed(1)}dB）`)
   console.log('  ', hi < 0.6
     ? `ok  窄带仍然生效：高频降了 ${(-20 * Math.log10(hi)).toFixed(1)}dB` : `FAIL 窄带失效（${hi.toFixed(3)}）`)
-  console.log('  ', mid > 0.5 && mid < 2
-    ? `ok  中频保留（${mid.toFixed(3)}）—— 语音可懂度没被削掉` : `FAIL 中频被改动（${mid.toFixed(3)}）`)
+  console.log('  ', fund > 0.5 && fund < 2
+    ? `ok  基频保留（${fund.toFixed(3)}）—— 语音可懂度没被削掉` : `FAIL 基频被改动了（${fund.toFixed(3)}）`)
 }
 
 ws.close(); child.kill(); process.exit(0)

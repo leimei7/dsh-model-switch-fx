@@ -218,7 +218,9 @@ function buildChain(c, p, target) {
     // 老式喇叭：低频起点随强度上移，高频截止随强度下移
     const hp = c.createBiquadFilter()
     hp.type = 'highpass'
-    hp.frequency.value = 60 + p.band * 520          // 60 → 580Hz
+    hp.frequency.value = 60 + p.band * 300          // 60 → 360Hz
+    // 斜率原来写的是 520（band=0.55 时高通落在 346Hz），把胸腔共鸣削得太狠，
+    // 声音变薄就"飘" —— 那是「空灵感」里一直被忽略的一项。降到 300。
     hp.Q.value = 0.7
     const lp = c.createBiquadFilter()
     lp.type = 'lowpass'
