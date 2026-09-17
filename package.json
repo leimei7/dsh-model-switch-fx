@@ -25,6 +25,7 @@
     "lib",
     "assets",
     "tools",
+    "docs",
     "showcase.html",
     "cordis.patch.yml",
     "README.md",
