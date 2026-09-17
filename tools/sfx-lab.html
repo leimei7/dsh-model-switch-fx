@@ -202,9 +202,19 @@ const CANDIDATES = [
   {
     id: 'single', name: '⑪ 单音叮', shape: 'single',
     struct: '单声部 · 只有一个长音，尾部微降 · duty 50%',
-    diff: '唯一单音：Game Boy 开机那种，最少即最强，也最从容',
+    diff: '唯一单音：Game Boy 开机那种，最少即最强 —— 但也最单调，当前未分配',
     duty: 0.5,
     voices: [{ kind: 'pulse', events: [[0, 0, 300, -1]] }],
+  },
+  {
+    // 为千问专门做的：它的人设是「受过良好教育的千金，从容知性，
+    // 偶尔流露出微微上扬的傲然尾音」—— 所以尾音做一个上挑滑音，字面实现那句话。
+    // 音程用 0-5-9-12（四度 + 大三度 + 小三度）而不是普通大三和弦，更「知性」一些。
+    id: 'poise', name: '⑫ 知性上扬', shape: 'flickTail',
+    struct: '单声部 · 4 音上行，尾音上挑 2 个半音 · duty 25%',
+    diff: '唯一在**尾音**做上挑滑音：字面实现「微微上扬的傲然尾音」',
+    duty: 0.25,
+    voices: [{ kind: 'pulse', events: [[0, 0, 60], [5, 65, 55], [9, 125, 55], [12, 185, 130, 14]] }],
   },
 ]
 
@@ -218,9 +228,9 @@ const CANDIDATES = [
  * **改动方案后必须重新测量**：跑一次 verify-sfx.mjs，它会打印新的 GAIN 表。
  */
 const GAIN = {
-  ready: 0.643, disk: 0.861, ensemble: 0.296, call: 0.39,
+  ready: 0.642, disk: 0.861, ensemble: 0.296, call: 0.39,
   arch: 0.728, stab: 0.762, horn: 0.362, glide: 0.518,
-  zigzag: 0.629, stepwise: 0.566, single: 1.069,
+  zigzag: 0.629, stepwise: 0.566, single: 1.069, poise: 0.671,
 }
 
 /* ── 角色 → 方案的分配（一一对应，不重复）────────────────────────────── */
@@ -231,7 +241,7 @@ const ASSIGN = {
   kimi: 'stepwise',      // 温和、级进
   deepseek: 'call',      // 低音先行，像设备醒来
   glm: 'horn',           // 号角
-  qwen: 'single',        // 从容：一个音就够
+  qwen: 'poise',         // 知性上扬：尾音上挑，对应它「傲然尾音」的人设
   grok: 'disk',          // 带噪声，机械挑衅
   minimax: 'glide',      // 连续滑音，「人的温度」
   musespark: 'stab',     // 活泼前台：两个和弦击
@@ -374,11 +384,13 @@ Object.keys(CHARS).forEach((id) => {
   tr.dataset.char = id
 })
 
-/* 方案库 */
+/* 方案库（标出没被分配的那个） */
 const libBody = document.getElementById('lib')
+const USED_IDS = new Set(Object.values(ASSIGN))
 for (const cand of CANDIDATES) {
   const tr = document.createElement('tr')
-  tr.innerHTML = `<td class="name">${cand.name}</td><td class="desc">${cand.struct}</td>`
+  const tag = USED_IDS.has(cand.id) ? '' : ' <span style="color:#b8865f">(未分配)</span>'
+  tr.innerHTML = `<td class="name">${cand.name}${tag}</td><td class="desc">${cand.struct}</td>`
     + `<td class="desc">${cand.diff}</td>`
   const td = document.createElement('td')
   const b = document.createElement('button')
