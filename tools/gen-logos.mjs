@@ -29,6 +29,7 @@ const TITLE_TO_ID = {
   MINIMAX: 'minimax',
   MUSESPARK: 'musespark',
   MIMO: 'mimo',
+  DOUBAO: 'doubao',
 }
 
 const html = readFileSync(SOURCE, 'utf8')
