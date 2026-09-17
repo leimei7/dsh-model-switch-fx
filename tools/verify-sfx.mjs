@@ -116,26 +116,50 @@ const CANDS = JSON.parse(await evalIn('JSON.stringify(window.__lab.CANDIDATES)')
 
 /* [1] 基本健康度 ─────────────────────────────────────────────────────── */
 console.log('\n[1] 每个候选：非静音 / 不削顶 / 总时长 250-400ms')
-const rmsList = []
+const CEIL = 0.95
+const gainMap = JSON.parse(await evalIn('JSON.stringify(window.__lab.GAIN)'))
+const rawList = []
 for (const c of CANDS) {
   const a = await render(`window.__lab.render(${JSON.stringify(c.id)}, null, ${C5})`)
   const evs = c.voices.flatMap((v) => v.events)
   const total = Math.max(...evs.map((e) => e[1] + e[2]))
   const amp = rms(a), pk = peakOf(a)
-  rmsList.push(amp)
+  const g = gainMap[c.id] ?? 1
+  // 反推「未归一化」的原始值，用来算推荐增益
+  rawList.push({ id: c.id, name: c.name, rawRms: amp / g, rawPeak: pk / g })
   const voices = c.voices.length
   const noise = c.voices.some((v) => v.kind === 'noise')
   const glide = evs.some((e) => e.length > 3)
   console.log(`   ${c.name}  ${total}ms  ${voices}声部${noise ? '+噪声' : ''}${glide ? '+滑音' : ''}`
-    + `  duty ${(c.duty * 100).toFixed(1).replace(/\.0$/, '')}%  RMS ${amp.toFixed(3)}  峰值 ${pk.toFixed(3)}`)
+    + `  duty ${(c.duty * 100).toFixed(1).replace(/\.0$/, '')}%  RMS ${amp.toFixed(3)}  峰值 ${pk.toFixed(3)}`
+    + `  (gain ${g})`)
   chk(amp > 0.02, `${c.name.padEnd(9)} 非静音`)
   chk(pk < 0.99, `${c.name.padEnd(9)} 不削顶（峰值 ${pk.toFixed(3)}）`)
   chk(total >= 250 && total <= 400, `${c.name.padEnd(9)} 总时长 ${total}ms 在 250-400ms 内`)
 }
 {
-  // 切角色时听感音量要一致 —— 跟语音那批做响度归一化是同一个道理
-  const dB = 20 * Math.log10(Math.max(...rmsList) / Math.min(...rmsList))
-  chk(dB < 3, `8 个候选响度一致（极差 ${dB.toFixed(2)} dB < 3）`)
+  // 切角色时听感音量要一致 —— 跟语音那批做响度归一化是同一个道理。
+  // 做法：每个候选不削顶能到的最大增益 = CEIL/rawPeak；在该增益下的 RMS 就是它
+  // 「能有多响」的上限。取所有候选里最小的那个作为统一目标 —— 于是谁都不削顶，
+  // 且响度完全一致。（峰值受限的候选会拖低整体，所以下面把推荐值打出来。）
+  const achievable = rawList.map((r) => ({ ...r, maxGain: CEIL / r.rawPeak }))
+  const target = Math.min(...achievable.map((r) => r.rawRms * r.maxGain))
+  console.log(`\n   统一目标 RMS = ${target.toFixed(3)}（等于「最吃亏」那个候选能到的上限）`)
+  console.log('   推荐 GAIN（直接填回 sfx-lab.html 的 GAIN 表）：')
+  const rec = {}
+  for (const r of achievable) {
+    rec[r.id] = +(target / r.rawRms).toFixed(3)
+    const peakAt = r.rawRms * rec[r.id] / r.rawPeak
+    const crest = 20 * Math.log10(r.rawPeak / r.rawRms)
+    console.log(`      ${r.id.padEnd(9)} ${String(rec[r.id]).padStart(6)}   `
+      + `(峰值→${(r.rawPeak * rec[r.id]).toFixed(3)}  波峰因数 ${crest.toFixed(1)}dB)`)
+  }
+  console.log('   ' + JSON.stringify(rec))
+  const dB = 20 * Math.log10(Math.max(...rawList.map((r) => r.rawRms * (gainMap[r.id] ?? 1)))
+    / Math.min(...rawList.map((r) => r.rawRms * (gainMap[r.id] ?? 1))))
+  chk(dB < 3, `11 个候选响度一致（极差 ${dB.toFixed(2)} dB < 3）`)
+  chk(achievable.every((r) => r.rawPeak * rec[r.id] <= CEIL + 1e-6),
+    `按推荐值归一化后谁都不削顶（峰值上限 ${CEIL}）`)
 }
 
 /* [2] 傅里叶级数 ─────────────────────────────────────────────────────── */
@@ -192,25 +216,39 @@ for (const c of CANDS) {
 }
 
 /* [4] 滑音 ───────────────────────────────────────────────────────────── */
-console.log('\n[4] 滑音：确认为连续上升（线性斜坡）')
+console.log('\n[4] 滑音：确认为连续斜坡（覆盖全部滑音事件）')
 {
-  const c = CANDS.find((x) => x.voices.some((v) => v.events.some((e) => e.length > 3)))
-  const vi = c.voices.findIndex((v) => v.events.some((e) => e.length > 3))
-  const [from, at, len, to] = c.voices[vi].events.find((e) => e.length > 3)
-  const a = await render(`window.__lab.renderVoice(${JSON.stringify(c.id)}, ${vi}, ${C5})`)
-  const atMs = (ms) => Math.floor(ms / 1000 * SR)
-  const f0 = C5 * Math.pow(2, from / 12), f1 = C5 * Math.pow(2, to / 12)
-  // 滑音音高持续变化，端点取窗只能得到平均值 —— 所以测**中点**和早期各一次，
-  // 与线性斜坡在该时刻的理论值比较，并确认确实是"往上滑"而不是一步跳过去。
-  const early = pitch(a.slice(atMs(at + 12), atMs(at + 12) + Math.floor(SR * 0.014)), SR)
-  const midAt = at + len * 0.5
-  const mid = pitch(a.slice(atMs(midAt - 7.5), atMs(midAt + 7.5)), SR)
-  const wantEarly = f0 + (f1 - f0) * 0.12 / (len / 1000) * 0.012
-  const wantMid = (f0 + f1) / 2
-  console.log(`   ${c.name} 滑音 ${from}→${to} 半音（${Math.round(f0)}→${Math.round(f1)}Hz）`
-    + `  实测 早期 ${Math.round(early)}Hz  中点 ${Math.round(mid)}Hz(理论 ${Math.round(wantMid)})`)
-  chk(Math.abs(mid - wantMid) / wantMid < 0.07, `滑音中点符合线性斜坡（误差 ${(Math.abs(mid - wantMid) / wantMid * 100).toFixed(1)}%）`)
-  chk(early < mid * 0.97, `确实是连续上升（早期 ${Math.round(early)} < 中点 ${Math.round(mid)}），不是跳变`)
+  let tested = 0
+  for (const c of CANDS) {
+    for (let vi = 0; vi < c.voices.length; vi++) {
+      const glides = c.voices[vi].events.filter((e) => e.length > 3)
+      if (glides.length === 0) continue
+      const a = await render(`window.__lab.renderVoice(${JSON.stringify(c.id)}, ${vi}, ${C5})`)
+      const atMs = (ms) => Math.floor(ms / 1000 * SR)
+      for (const [from, at, len, to] of glides) {
+        const f0 = C5 * Math.pow(2, from / 12), f1 = C5 * Math.pow(2, to / 12)
+        // 滑音音高持续变化，端点取窗只能得到平均值 —— 测**中点**与线性斜坡理论值比较
+        const early = pitch(a.slice(atMs(at + 12), atMs(at + 12) + Math.floor(SR * 0.014)), SR)
+        const midAt = at + len * 0.5
+        const mid = pitch(a.slice(atMs(midAt - 7.5), atMs(midAt + 7.5)), SR)
+        const wantMid = (f0 + f1) / 2
+        const change = Math.abs(f1 - f0) / f0
+        console.log(`   ${c.name} 声部${vi} 滑音 ${from}→${to} 半音（${Math.round(f0)}→${Math.round(f1)}Hz）`
+          + `  实测 早期 ${Math.round(early)}  中点 ${Math.round(mid)}(理论 ${Math.round(wantMid)})`)
+        chk(Math.abs(mid - wantMid) / wantMid < 0.07,
+          `${c.name} 滑音中点符合线性斜坡（误差 ${(Math.abs(mid - wantMid) / wantMid * 100).toFixed(1)}%）`)
+        if (change > 0.05) {
+          // 变化够大才测方向；⑪ 是 5.6% 的微降，落在音高检测的分辨率边缘
+          const dir = Math.sign(f1 - f0)
+          chk(Math.sign(mid - early) === dir, `${c.name} 滑音方向正确（朝终点移动）`)
+        } else {
+          console.log(`       （总变化仅 ${(change * 100).toFixed(1)}%，跳过方向判定 —— 低于音高检测分辨率）`)
+        }
+        tested++
+      }
+    }
+  }
+  chk(tested >= 2, `共校验 ${tested} 个滑音事件（≥2）`)
 }
 
 /* [5] 跨采样率 ───────────────────────────────────────────────────────── */
@@ -246,11 +284,26 @@ console.log('\n[6] 角色根音映射单调（A4~E5）')
 }
 
 /* [7] 候选两两差异度 ─────────────────────────────────────────────────── */
-console.log('\n[7] 候选两两差异度（简报公式 + 我补的「音程内容」项）')
-console.log('    d = 2.0·Δ走向 + 1.5·|声部数差|/3 + 1.5·D_IOI + 0.5·|占空比差|')
+console.log('\n[7] 分配是否一一对应 + 两两差异度')
+{
+  const assign = JSON.parse(await evalIn('JSON.stringify(window.__lab.ASSIGN)'))
+  const chars = JSON.parse(await evalIn('JSON.stringify(window.__lab.CHARS)'))
+  const used = Object.values(assign)
+  console.log('    角色 → 方案：')
+  for (const id of Object.keys(chars)) {
+    const c = CANDS.find((x) => x.id === assign[id])
+    console.log(`      ${id.padEnd(11)} → ${c ? c.name : '?'}`)
+  }
+  chk(Object.keys(assign).length === Object.keys(chars).length,
+    `每个角色都分配了（${Object.keys(assign).length}/${Object.keys(chars).length}）`)
+  chk(new Set(used).size === used.length,
+    `11 个角色拿到 11 个**互不相同**的方案（去重后 ${new Set(used).size} 个）`)
+  chk(used.every((u) => CANDS.some((c) => c.id === u)), `分配的方案 id 都存在`)
+}
+console.log('\n    d = 2.0·Δ走向 + 1.5·|声部数差|/3 + 1.5·D_IOI + 0.5·|占空比差|')
 console.log('        + 1.0·Δ噪声起手 + 1.0·Δ滑音 + 1.0·D_pitch')
-console.log('    （D_pitch 是我补的：简报把「音程内容」排在第 4 位，但给的公式漏了它 ——')
-console.log('      结果 [0,4,7,12] 和 [0,4,7,12,16] 会被判成同一内容，只差节奏。）')
+console.log('    （D_pitch 是我补的：简报把「音程内容」排第 4，但公式漏了它 ——')
+console.log('      否则 [0,4,7,12] 与 [0,4,7,12,16] 会被判成同一内容、只差节奏。）')
 {
   const feat = CANDS.map((c) => {
     const evs = c.voices.flatMap((v) => v.events)
@@ -336,16 +389,20 @@ console.log('\n[8] 试听页 UI')
 await sleep(700)
 {
   const ui = JSON.parse(await evalIn(`JSON.stringify({
-    duty: document.querySelectorAll('#duty button').length,
-    rows: document.querySelectorAll('#mel tr').length,
-    chars: document.querySelectorAll('#chars button').length,
+    assignRows: document.querySelectorAll('#assign tr').length,
+    libRows: document.querySelectorAll('#lib tr').length,
+    playAll: !!document.getElementById('playAll'),
+    assignButtons: document.querySelectorAll('#assign button').length,
+    libButtons: document.querySelectorAll('#lib button').length,
     canvas: (function(){const c=document.getElementById('wave')
       const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data
       let n=0; for(let i=3;i<d.length;i+=4) if(d[i]>0) n++; return n})(),
   })`))
-  chk(ui.duty === 4, `占空比按钮 ${ui.duty}/4（按候选 + 三档）`)
-  chk(ui.rows === 8, `候选 ${ui.rows}/8`)
-  chk(ui.chars === 11, `角色按钮 ${ui.chars}/11`)
+  chk(ui.assignRows === 11, `角色→方案 表 ${ui.assignRows}/11 行`)
+  chk(ui.assignButtons === 11, `角色试听按钮 ${ui.assignButtons}/11`)
+  chk(ui.libRows === 11, `方案库 ${ui.libRows}/11 行`)
+  chk(ui.libButtons === 11, `方案库试听按钮 ${ui.libButtons}/11`)
+  chk(ui.playAll, '「依次播放全部 11 个」按钮存在')
   chk(ui.canvas > 1000, `首屏波形已绘制（${ui.canvas} 个不透明像素）`)
 }
 
