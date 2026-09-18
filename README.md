@@ -82,6 +82,25 @@
 
 ---
 
+## 环境要求
+
+| 依赖 | 版本 | 说明 |
+|------|------|------|
+| Node.js | ≥ 20 | DSH 自身的最低要求 |
+| DSH Web profile | — | 必须包含 `@deepseek-ai/dsh-web-app`。装进 TUI / headless 会启动失败 |
+| Cordis | ≥ 4.0.2 | 插件 peerDependency，安装时 pnpm 会自动检查 |
+
+当前插件在 **Cordis 4.0.2** 上实测运行正常。
+如果你遇到不兼容的情况，大概率是 Cordis 版本不够新 —— 可以检查本地 Cordis 版本：
+
+```bash
+node -e "console.log(require('@deepseek-ai/cordis/package.json').version)"
+```
+
+如果版本低于 4.0.2，更新 DSH 即可（`dsh self update`）。
+
+---
+
 ## 安装
 
 ### 方式一：从 GitHub 装（推荐）
