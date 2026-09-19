@@ -12,3 +12,6 @@ frames/
 # 临时截图（每次验证时生成，不进仓库）
 _rf.png
 _shots/
+
+# TTS API key（本地，绝不进版本库）
+tools/.mimo-key

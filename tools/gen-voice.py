@@ -32,11 +32,35 @@ import numpy as np
 from scipy.io import wavfile
 from scipy.signal import butter, fftconvolve, sosfilt
 
-API_URL = "https://api.xiaomimimo.com/v1/chat/completions"
-MODEL = "mimo-v2.5-tts-voicedesign"
+# 端点 / 模型。2026-09 换成 token-plan 入口 + mimo-v2.5-tts
+# （原来: https://api.xiaomimimo.com/v1/chat/completions + mimo-v2.5-tts-voicedesign）
+API_BASE = os.environ.get("MIMO_API_BASE", "https://token-plan-cn.xiaomimimo.com/v1")
+MODEL = os.environ.get("MIMO_MODEL", "mimo-v2.5-tts")
+API_URL = API_BASE.rstrip("/") + "/chat/completions"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(os.path.dirname(HERE), "assets")
+KEY_FILE = os.path.join(HERE, ".mimo-key")
+
+
+def api_key():
+    """环境变量优先，其次 tools/.mimo-key（**在 .gitignore 里，不进版本库**）。
+
+    这样不用每次 export —— 但仓库是公开的，key 绝不能进版本库。
+    """
+    k = os.environ.get("MIMO_API_KEY")
+    if k and k.strip():
+        return k.strip()
+    if os.path.exists(KEY_FILE):
+        with open(KEY_FILE, "r", encoding="utf-8") as f:
+            k = f.read().strip()
+        if k:
+            return k
+    sys.exit(
+        "缺少 API key。两种给法：\n"
+        "  · 环境变量  $env:MIMO_API_KEY='...'（Windows）/ export MIMO_API_KEY=...\n"
+        f"  · 或者写进 {KEY_FILE}（该文件在 .gitignore 里，不会进版本库）"
+    )
 
 FFMPEG = os.environ.get("FFMPEG") or "ffmpeg"
 FFPROBE = os.environ.get("FFPROBE") or os.path.join(os.path.dirname(FFMPEG), "ffprobe")
@@ -78,11 +102,10 @@ CONFIG = {
 
 def tts(text, voice_prompt):
     import requests
-    key = os.environ.get("MIMO_API_KEY")
-    if not key:
-        sys.exit("缺少环境变量 MIMO_API_KEY（不把 key 写进代码，仓库是公开的）")
+    key = api_key()
     resp = requests.post(API_URL, headers={
         "api-key": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }, json={
         "model": MODEL,
