@@ -8,3 +8,7 @@ Thumbs.db
 .cache/
 shots/
 frames/
+
+# 临时截图（每次验证时生成，不进仓库）
+_rf.png
+_shots/
