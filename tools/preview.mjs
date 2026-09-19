@@ -1,7 +1,7 @@
 /**
  * 开发预览服务器 —— 不开 DSH 也能单独调这个动画。
  *
- * 它用真实的 CLIENT_CSS / lib/client.js / assets/*.mp3 起一个最小页面，
+ * 它用真实的 clientCss() / lib/client.js / assets/*.mp3 起一个最小页面，
  * 接口路径与宿主注册的完全一致，所以这里看到的就是 DSH 里会看到的。
  *
  * 用法: node tools/preview.mjs [端口]
@@ -11,7 +11,7 @@ import { createServer } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { CLIENT_CSS, VOICES } from '../lib/index.js'
+import { clientCss, VOICES } from '../lib/index.js'
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const PORT = Number(process.argv[2] ?? 5199)
@@ -55,7 +55,7 @@ const PAGE = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>dsh-model-switch-fx preview</title>
 <style>
-${CLIENT_CSS}
+${clientCss()}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:#0b0b12;color:#5b6172;
   font:13px/1.7 ui-monospace,Consolas,monospace}

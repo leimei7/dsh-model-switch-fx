@@ -1,0 +1,285 @@
+#dsf-root{position:fixed;inset:0;z-index:2147483000;pointer-events:none;
+  display:flex;align-items:center;justify-content:center;
+  /* 内容整体居上一点：底部留白把居中块往上推（推 padding 的一半）。
+     视觉重心略高比正中间好看，也给下方留出呼吸空间。 */
+  padding-bottom:20vh;
+  opacity:0;transition:opacity .3s ease}
+/* 动画期间接管输入：像一次真正的系统切换，不允许操控下层页面。
+   鼠标**直接隐藏**（cursor:none）而不是给转圈 —— 系统切换的时候不该看得见指针；
+   遮罩铺满视口，所以整个页面都看不见；dsf-on 摘掉时自然回来。
+   （原先写的是 cursor:progress，那个小圈反而像页面卡住了。） */
+#dsf-root.dsf-on{opacity:1;pointer-events:auto;cursor:none}
+/* 淡出必须用单独的 class：直接移除 dsf-on 会连指针接管一起撤掉，
+   于是淡出的那 800ms 里鼠标已经能点穿到下层，键盘却还锁着 —— 不一致。
+   独占一条规则且排在 dsf-on 之后，所以两者同时存在时以淡出的透明度为准。 */
+#dsf-root.dsf-out{opacity:0;transition:opacity .8s ease}
+/* 背景处理：只有一圈很轻的中央压暗，不做虚化。
+   虚化（backdrop-filter）虽然好看，但整个视口持续重合成，低端机掉帧，
+   而且会把下层界面糊掉 —— 直接显示更干净。 */
+#dsf-dim{position:absolute;inset:0;
+  background:radial-gradient(ellipse at 50% 50%,
+    rgba(3,4,10,.62) 0%,rgba(3,4,10,.34) 42%,rgba(3,4,10,0) 72%)}
+/* 颗粒质感：预渲染的 64×64 噪声平铺（不是 <feTurbulence> —— 那个逐帧重算会掉帧，
+   也不用 base64 内联 —— 随机噪声压不动，会让每次页面加载多背 20KB）。
+   静态不动：颗粒属于「屏幕」而不是画面内容，所以它不该跟着 logo 动。
+   想调强弱就改这里的 opacity；想整体关掉就把这条规则删掉。 */
+#dsf-dim::after{content:'';position:absolute;inset:0;pointer-events:none;
+  background-image:url(__DSF_BASE__/grain.png);background-repeat:repeat;
+  opacity:.055}
+/* 光晕跟随描边渐入：一开场就满强度的话，logo 还只是几条短线时
+   会先出现一团孤立的绿云，和图形脱节。所以透明度走 transition 慢慢起，
+   呼吸只动 transform（否则 animation 会盖掉 transition 的透明度）。
+   它挂在 #dsf-stage 内部，尺寸按 stage 的百分比算 —— 布局怎么挪都跟着走。 */
+#dsf-halo{position:absolute;left:50%;top:50%;width:150%;height:150%;
+  transform:translate(-50%,-50%) scale(.72);border-radius:50%;filter:blur(90px);opacity:0;
+  transition:opacity 2.2s ease .4s,transform 2.2s ease .4s}
+#dsf-root.dsf-on #dsf-halo{opacity:.3;transform:translate(-50%,-50%) scale(1);
+  animation:dsf-halo 3.2s ease-in-out 2.6s infinite}
+@keyframes dsf-halo{0%,100%{transform:translate(-50%,-50%) scale(.97)}
+  50%{transform:translate(-50%,-50%) scale(1.09)}}
+/* 减少动态效果：关掉光晕的**持续呼吸**（那是一直在动的），描边本身在 JS 里跳过。
+   淡入淡出保留 —— 那是「变化」不是「运动」。 */
+@media (prefers-reduced-motion:reduce){
+  #dsf-root.dsf-on #dsf-halo{animation:none}
+  #dsf-halo{transition-duration:.5s;transition-delay:0s}
+  #dsf-root{transition-duration:.15s}
+  #dsf-root.dsf-out{transition-duration:.4s}
+}
+#dsf-core{position:relative;display:flex;flex-direction:column;align-items:center;gap:36px}
+#dsf-stage{position:relative;width:min(54vw,450px,50vh);height:min(54vw,450px,50vh)}
+/* SVG 必须压在光晕之上：光晕是绝对定位的，不提升的话会盖住图形 */
+#dsf-stage svg{position:relative;z-index:1;width:100%;height:100%;overflow:visible;display:block}
+#dsf-stage svg path{stroke-linecap:round;stroke-linejoin:round}
+#dsf-stage .dsf-outline path{fill:none;stroke-dasharray:1000;stroke-dashoffset:1000}
+#dsf-stage .dsf-solid{stroke:none;opacity:0;transition:opacity .9s ease}
+#dsf-root.dsf-drawn .dsf-solid{opacity:1}
+/* 公司名：描边画完后浮出 */
+#dsf-company{font:600 clamp(17px,1.95vw,26px)/1 'Bahnschrift','DIN Alternate','Arial Narrow',Consolas,monospace;
+  letter-spacing:.36em;text-indent:.36em;text-transform:uppercase;white-space:nowrap;
+  color:var(--dsf-c,#fff);opacity:0;transform:translateY(10px);
+  transition:opacity .6s ease,transform .6s ease;
+  text-shadow:0 0 14px var(--dsf-c,#fff),0 0 44px var(--dsf-c,#fff)}
+#dsf-root.dsf-drawn #dsf-company{opacity:.95;transform:none}
+/* ══ 启动动画（<kiki:on> / <kiki:off> 的仪式）═══════════════════════════
+   浮层是一台**老式电子屏幕** —— 一台摆在房间里的机器，不是一块黑布。
+
+   资料原话：「A CRT look is not one effect, it is four:
+   scanlines, curvature, phosphor bloom and mains flicker.」
+   我第一版只做了扫描线 —— 曲率、磷光辉光、电源闪烁三个都没有，所以"电子屏幕感不明显"。
+   现在四个都补齐。
+
+   曲率是**两个**效果合起来装成一个（资料原话）：
+     · 玻璃边缘 = 外壳上一个大圆角，屏幕裁在里面
+       —— **只做圆角会得到一个"圆角矩形"，那读起来是现代设备，不是显像管**
+     · 光学衰减 = 另一层径向渐变把四角压暗
+   两层都在。
+
+   层次：① 房间（后面的页面，暗）
+        ② 屏幕外壳的玻璃厚度（内阴影 + 一圈高光）
+        ③ 屏幕内部：磷光辉光 → 两个记号 + 字标 → 屏幕结构（反光/荫罩/扫描线/暗角/刷新带/闪烁/静态/漂移/颗粒）
+   **③ 里的屏幕结构必须盖在记号之上** —— 不然记号看着像贴在屏幕外面的。 */
+#dsf-boot{position:fixed;inset:0;z-index:2147483000;pointer-events:none;
+  /* 房间：后面的页面还在，压暗 —— 屏幕是摆在它前面的一个物体。
+     **暖近黑**。原来写的是 rgba(3,5,7)（冷），复古未来的底是暖的 ——
+     资料原话：「one phosphor color on a **warm near-black ground**」。 */
+  background:rgba(12,8,5,.64);
+  opacity:0;transition:opacity .34s ease}
+#dsf-boot.dsf-on{opacity:1;pointer-events:auto;cursor:none}
+#dsf-boot.dsf-out{opacity:0;transition:opacity .5s ease}
+
+/* 屏幕本体：四周留一圈（外壳），**椭圆大圆角**，内容裁在里面 */
+#dsf-boot .b-crt{position:absolute;inset:1.15vmin;
+  display:flex;align-items:center;justify-content:center;padding-bottom:5vh;
+  border-radius:2.6vmin/3.6vmin;overflow:hidden;
+  background:rgba(14,9,5,.88);
+  /* 外壳：外沿一圈暖色高光（玻璃切边）+ 内圈一圈暗（玻璃厚度）+ 屏幕自身往内压暗
+     + **屏幕的光洒到墙上** ——
+     资料原话：「screens should **emit** light rather than display it」。
+     最后两层就是洒在房间墙上的暖光。 */
+  box-shadow:0 0 0 1px rgba(200,178,132,.12),
+             inset 0 0 0 1px rgba(0,0,0,.75),
+             inset 0 0 5vmin rgba(0,0,0,.55),
+             0 1.8vmin 5.5vmin rgba(0,0,0,.62),
+             0 0 9vmin rgba(255,176,60,.10),
+             0 0 22vmin rgba(255,150,40,.055)}
+
+/* ══ 减法：十层 → 五层 ══════════════════════════════════════════════════
+   专家原话（大意）：
+     · 「几乎所有主流 CRT shader 的**真实感核心包只有四样**：
+        扫描线、荫罩/磷光条、暗角、辉光」
+     · **色差**「全屏均匀挂着，等于告诉观众这是后期贴上去的。
+        真实的 CRT 色差跟着**屏幕曲率**走，不跟内容走」
+     · **颗粒**是**胶片**语言，不是**显像管**语言；而且和静态噪声同语义重复
+     · 「**"贴上去" vs "长出来"的判别法**：一个效果如果物理上**只在该出现的地方出现**
+        （暗角只在角落、荫罩只在亮部、色差只在屏幕边缘），它读起来是**长出来的**；
+        如果它无视内容**均匀铺在全屏**，就是**贴上去的**」
+     · 「**每个语义家族只留一个代表**。加法机器的毛病不是层多，
+        是同一个意思说了三遍」
+
+   所以删掉的：
+     ✗ 色差（bFChroma）—— 排在第一个删。它是"后期贴上去"的典型
+     ✗ 颗粒（.b-grain）—— 胶片语言，且与静态噪声重复
+     ✗ 整块屏的抖动（.b-crt 的 jitter）—— 并进刷新带，不单独存在
+   合并的：
+     · 扫描线 + 荫罩 → **一个元素** .b-tube（两层背景，同一个"管体结构"家族）
+     · 暖色漂移 + 电源闪烁 → **一个元素** .b-breath（"磷光呼吸"家族）
+   保留但改成"只在需要时出现"：
+     · 静态噪声 .b-static —— **只在关机的那半秒里出现**，不常驻
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 磷光辉光：整块屏一层柔光。资料里 CRT 四件套之一，我原来完全没做 */
+#dsf-boot .b-bloom{position:absolute;inset:-8%;pointer-events:none;
+  background:radial-gradient(56% 50% at 50% 46%,
+    rgba(255,238,200,.11) 0%,rgba(238,79,164,.055) 40%,
+    rgba(0,168,168,.032) 64%,rgba(0,0,0,0) 100%);
+  mix-blend-mode:screen}
+
+/* 玻璃反光：**左上角**一块镜面高光（资料点名的位置） */
+#dsf-boot .b-glare{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(38% 32% at 21% 11%,
+    rgba(205,232,255,.085) 0%,rgba(205,232,255,.024) 46%,rgba(255,255,255,0) 74%),
+    linear-gradient(122deg,rgba(205,232,255,.03) 0%,rgba(255,255,255,0) 42%)}
+
+/* 管体结构（家族一）：扫描线 + 荫罩。
+   专家：「每个语义家族只留一个代表」—— 这两样本来就是"管体"的同一件事，
+   所以算**一个家族**。
+
+   **但不能挤进一个元素** —— 我上一版就是把两者并成同一个 background，
+   于是它们共用了 multiply；而荫罩原来是 overlay。
+   混色模式被换掉，荫罩的提亮变成了压暗，那一条结构基本被吃掉。
+   （量了一下还残存 0.8 的相邻像素差，但它已经不是原来那个东西了。）
+   CSS 没法给同一个元素的多个 background 分别指定 mix-blend-mode，
+   所以这里保留两个元素：**家族合并了，元素没合并** —— 该合的是语义，不是 DOM。
+
+   扫描线：3px 周期的**软坡**，不是 1px 硬线 ——
+   资料点名的坑是「1px 硬边扫描线在小数设备像素比下会走样」，软坡没有摩尔纹。
+   荫罩：周期 5px，和 3px 错开，避免摩尔纹。 */
+#dsf-boot .b-tube{position:absolute;inset:0;pointer-events:none;mix-blend-mode:multiply;
+  background:repeating-linear-gradient(to bottom,
+    rgba(0,0,0,.32) 0px,rgba(0,0,0,.06) .85px,rgba(0,0,0,0) 1.5px,
+    rgba(0,0,0,.06) 2.15px,rgba(0,0,0,.32) 3px)}
+#dsf-boot .b-mask{position:absolute;inset:0;pointer-events:none;
+  mix-blend-mode:overlay;opacity:.24;
+  background:repeating-linear-gradient(to right,
+    rgba(120,255,210,.055) 0 1px,rgba(255,120,180,.05) 1px 2px,
+    rgba(120,170,255,.055) 2px 3px,rgba(0,0,0,0) 3px 5px)}
+
+/* 光学衰减：曲率的第二半 —— 四角压暗。只做圆角是没有曲率的。
+   **只出现在角落**，所以它是"长出来的"那一类。 */
+#dsf-boot .b-vig{position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(130% 130% at 50% 50%,rgba(0,0,0,0) 40%,
+    rgba(0,0,0,.34) 70%,rgba(0,0,0,.80) 100%)}
+
+/* 刷新带：一道很淡的亮带缓慢下行 —— 老屏幕最强的**动态**信号。
+   原来整块屏另有一个 jitter 动画，删了 —— 专家说「并进刷新带，别单独存在」：
+   所以"不稳定"由刷新带自己承担：它的循环不是匀速的，会偶尔顿一下。 */
+#dsf-boot .b-roll{position:absolute;left:-12%;right:-12%;height:26%;pointer-events:none;
+  mix-blend-mode:screen;animation:dsf-crt-roll 7.1s linear infinite;
+  background:linear-gradient(to bottom,rgba(255,255,255,0) 0%,
+    rgba(255,214,180,.05) 46%,rgba(255,255,255,.065) 52%,rgba(255,255,255,0) 100%)}
+@keyframes dsf-crt-roll{
+  0%{top:-32%}
+  62%{top:52%}       /* 走到一半，顿一下（不匀速 —— 老机器的同步在打滑） */
+  66%{top:56%}
+  100%{top:106%}}
+
+/* 磷光呼吸（家族二）：**暖色漂移 + 电源闪烁合并成一个元素**。
+   专家：「同一个意思说了三遍」是加法机器的毛病 —— 这两样都是"磷光的稳定度在变"。
+   一条不规则的关键帧同时承载色温与亮度。 */
+#dsf-boot .b-breath{position:absolute;inset:0;pointer-events:none;mix-blend-mode:screen;
+  background:#FFD8A0;animation:dsf-crt-breath 11.3s steps(1,end) infinite}
+@keyframes dsf-crt-breath{
+  0%{opacity:.030} 7%{opacity:.055} 8%{opacity:.022} 9%{opacity:.048}
+  15%{opacity:.075} 16%{opacity:.028} 33%{opacity:.052} 34%{opacity:.020}
+  35%{opacity:.046} 52%{opacity:.082} 53%{opacity:.024} 60%{opacity:.058}
+  61%{opacity:.018} 62%{opacity:.040} 78%{opacity:.070} 79%{opacity:.022}
+  82%{opacity:.050} 83%{opacity:.016} 100%{opacity:.030}}
+
+/* 静态噪声：**只在关机的那半秒里出现**，不常驻。
+   专家：显像管的噪声是"信号弱时才明显"的雪花 —— 断电那一刻信号消失，才是它该出现的时候。
+   常驻的话它和颗粒是同语义重复，观众只觉得"脏"。
+
+   **它不是一个开关。** 我第一版做成了"到某个时刻啪一下打开 opacit .10"，
+   结果在关机还剩 0.55s（线稿才擦掉一半）时就糊上一层雪花 —— 那不是信号渐弱，
+   是贴了一张花屏，很生硬。现在改成**连续浮上来**：透明度由 JS 按时间算，
+   写成 CSS 变量 --static-a，缓入曲线（平方），越靠近结尾越明显。 */
+#dsf-boot .b-static{position:absolute;inset:0;pointer-events:none;mix-blend-mode:screen;
+  opacity:var(--static-a,0);
+  background-image:url(__DSF_BASE__/grain.png);background-repeat:repeat;
+  background-size:130px 130px;animation:dsf-crt-static .1s steps(1,end) infinite}
+@keyframes dsf-crt-static{
+  0%{background-position:0 0}25%{background-position:-37px 61px}
+  50%{background-position:83px -29px}75%{background-position:-19px -71px}
+  100%{background-position:47px 37px}}
+
+@media (prefers-reduced-motion:reduce){
+  #dsf-boot .b-roll{display:none}
+  #dsf-boot .b-static{display:none}
+  #dsf-boot .b-breath{animation:none;opacity:.04}
+}
+/* ══ 联名锁定：舞台 + 字标 ═════════════════════════════════════════════
+   两者**同宽** —— 这一条是关键：字标的 viewBox 宽度和锁定一样是 1216，
+   而两个元素都占满同一个 .b-core 的宽度，于是**两个 × 的横坐标天然对齐**，
+   不用靠调 margin 去凑。（字标里的 × 落在 486.95，和锁定里的 × 同一个值。）
+
+   宽度一个约束搞定：锁定 1216×480、字标 1216×44、再加上间距，
+   总高 ≈ 宽度 × 0.447。所以给宽度同时压一个 176vh 的上限 ——
+   这样短屏时整体等比缩小，**不会出现 letterbox 把两个 × 推错位**。 */
+#dsf-boot .b-core{position:relative;z-index:1;display:flex;flex-direction:column;
+  align-items:center;width:min(92vw,1140px,176vh)}
+#dsf-boot .b-stage{position:relative;width:100%;aspect-ratio:1216/480}
+#dsf-boot .b-stage svg{position:relative;z-index:1;width:100%;height:100%;
+  overflow:visible;display:block}
+/* 系统的名字：**KIKI × KILAKI** —— 和上面的锁定同构（两个名字，中间一个 ×）。
+   位置与角色过场的公司名同源 —— 它是记号的底座，也是整段动画的落点。
+
+   它**不是排版出来的，是显示出来的**：每一格由八根笔画组成，
+   靠点亮哪几根来成形（矢量 / 仪器显示面板的做法）。
+   原来用的是一串系统字体（'Bahnschrift','DIN Alternate',...）——
+   那有两个毛病：
+     · Windows 上是 Bahnschrift、macOS 上是 DIN Alternate，
+       同一套名字在不同机器上是**不同的字**。一个签名最不该这样
+     · 就算锁定到 Bahnschrift，它也是 DIN 1451 的克隆 ——
+       所有科幻 UI 的默认字。对，但不独特
+   改成笔画之后：字形是路径（每台机器一致）、主题正确、
+   而且**解码有了着落** —— 不是换字母，是笔画在乱亮，像显示器在找自己的状态。
+
+   字形：**几何骨架 + 圆润收笔**（专家给的方向）。
+    我上一版做的是"细、窄、直角、大 tracking" —— 专家说那是
+    **"企业科技发布会的语言，不是复古未来少女的"**，而且错在
+    **让字体替屏幕说冷峻，结果两个冷峻叠加，没有一个暖的支点**：
+
+      · 机械感交给 CRT 屏幕去承担；**字体承担"人"的那一半**
+      · 参考系是**80 年代消费电子的乐观主义**（圆润的无衬线、柔和的字碗、略宽的比例）
+      · 具体规格：加宽 15~25%、直角改小圆角、tracking 收小一档
+
+    所以：格 24→29（+21%）、字距 16→12（收一档）、
+    端头从 butt 改 **round**、转角从 miter 改 **round**（圆润收笔 = "人"的那半）、
+    线宽 2.4→2.9（圆角半径跟着变大）。
+
+   × 那一组：和锁定里那个 × **完全一样** —— 跨度、线宽、颜色、端头、
+    辉光滤镜五样全部照搬（--w / --c 由 JS 写在那一组的 style 上）。
+    **它保持方头** —— 它是记号，不是字。 */
+#dsf-boot .b-word{width:100%;margin-top:1.3vmin;opacity:0;line-height:0}
+/* 辉光用锁定里同一个 SVG 滤镜（#bFInk）—— 两个 × 的辉光也必须同源，
+   不然"一模一样"就只做到颜色、做不到光。 */
+#dsf-boot .b-word svg{display:block;overflow:visible;width:100%;height:auto;
+  filter:url(#bFInk)}
+/* 名字：纯白、几何骨架、**圆润收笔**。未选中的字形不画（opacity 0）。 */
+#dsf-boot .b-word path{fill:none;stroke:#FFFFFF;stroke-width:2.9;
+  stroke-linecap:round;stroke-linejoin:round;opacity:0}
+/* 乱换中的字形：降到四成半亮，于是"还在换"和"已经对上"在明暗上分得开 */
+#dsf-boot .b-word path.on{opacity:.45}
+/* 已对上的字形：全亮纯白 */
+#dsf-boot .b-word path.lock{opacity:1}
+/* × 那一组：两条 line。线宽和颜色由 JS 写在组的 style 上（--w / --c）。
+   **和锁定里那个 × 完全一样** —— 用户要"一模一样"，所以不能只是"看着像"。
+   （CSS 的元素规则会盖掉组的 stroke-width 属性，所以只能走变量。） */
+#dsf-boot .b-word line{fill:none;stroke:var(--c,#FFF6DC);stroke-width:var(--w,9);
+  stroke-linecap:square;opacity:0}
+#dsf-boot .b-word line.on{opacity:.5}
+#dsf-boot .b-word line.lock{opacity:1}
+@media (prefers-reduced-motion:reduce){
+  #dsf-boot{transition-duration:.15s}
+  #dsf-boot.dsf-out{transition-duration:.35s}
+}
